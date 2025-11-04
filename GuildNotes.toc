@@ -1,0 +1,23 @@
+## Interface: 11505
+## Title: GuildNotes
+## Author: Deepbussy
+## Version: 2.0.0
+## SavedVariables: GuildNotesDB
+
+LibStub.lua
+LibDataBroker-1.1.lua
+LibDBIcon-1.0.lua
+GuildNotes_Core.lua
+Utils.lua
+Core.lua
+Comm.lua
+Context.lua
+Menu.lua
+Chat.lua
+
+GuildNotes_UI_Search.lua
+GuildNotes_UI_Rows.lua
+GuildNotes_UI_Editor.lua
+GuildNotes_UI_Main.lua
+
+UI_Prefill.lua
