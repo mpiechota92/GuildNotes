@@ -1,0 +1,13 @@
+# WoW addon ignore file
+*.bak
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+
+# Keep only addon source files
+*.toc
+*.lua
+*.xml
+*.md
+
