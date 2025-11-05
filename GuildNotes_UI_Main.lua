@@ -4,9 +4,9 @@
 local ADDON_NAME, ns = ...
 ns.UI = ns.UI or {}
 local UI = ns.UI
-local UpdateFooter
+local UpdateFooter  -- forward declaration
 
--- Scroll by raw row offset (not pages). Will clamp and re-render.
+-- Page-based wheel scrolling: move exactly one page per step (no overlaps)
 function UI:ScrollOffsetBy(n)
   -- n: positive = next page, negative = previous page (we clamp)
   local per   = math.max(self.visibleRows or 0, 1)
@@ -97,6 +97,13 @@ function UI:Init()
   local f = CreateFrame("Frame", ADDON_NAME.."Main", UIParent, "BackdropTemplate")
   f:SetSize(980, 470)
   f:SetPoint("CENTER")
+  -- Make it draggable
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+  f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+  -- f:SetUserPlaced(true)
   f:SetBackdrop({
     bgFile="Interface/DialogFrame/UI-DialogBox-Background",
     edgeFile="Interface/Tooltips/UI-Tooltip-Border", edgeSize=14,
@@ -108,11 +115,12 @@ function UI:Init()
   f:Hide()
   self.frame = f
 
-  -- ESC handling
+  -- ESC handling on MAIN: close editor first (if open) else close main; do not propagate to Game Menu
   f:EnableKeyboard(true)
   if f.SetPropagateKeyboardInput then f:SetPropagateKeyboardInput(true) end
   f:SetScript("OnKeyDown", function(selfFrame, key)
     if key == "ESCAPE" then
+      if selfFrame.SetPropagateKeyboardInput then selfFrame:SetPropagateKeyboardInput(false) end
       if UI.editor and UI.editor:IsShown() then
         UI.editor:Hide()
       else
@@ -221,7 +229,7 @@ function UI:Init()
   pageArea:SetPoint("RIGHT", btnContainer, "LEFT", -12, 0) -- keep gap from the arrows
   pageArea:SetHeight(24)
 
-  -- Centered "Page X of Y" text (replaces the old 2/2 location)
+  -- Centered "Page X of Y" text
   local pageText = pageArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   pageText:SetPoint("CENTER", pageArea, "CENTER", 0, 0)
   pageText:SetJustifyH("CENTER")
@@ -299,18 +307,16 @@ function UI:Refresh()
   -- (Re)compute pages based on search results and visible rows
   RecomputePages(self)
 
-    -- Compute and clamp pageIndex + offset (page-aligned)
+  -- Compute and clamp pageIndex + offset (page-aligned)
   local per = math.max(self.visibleRows or 0, 1)
   if (self.totalPages or 0) == 0 then
     self.pageIndex = 0
     self.offset    = 0
   else
-    -- clamp page index to new total pages (important after deletes)
     if not self.pageIndex or self.pageIndex < 1 then self.pageIndex = 1 end
     if self.pageIndex > self.totalPages then self.pageIndex = self.totalPages end
     self.offset = (self.pageIndex - 1) * per
   end
-
 
   -- Render current page
   if self.RenderRows then

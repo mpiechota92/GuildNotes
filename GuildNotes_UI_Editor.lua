@@ -16,7 +16,6 @@ function UI:EnsureEditor()
   blocker:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
   blocker:EnableMouse(true)
   if blocker.SetBackdropColor then blocker:SetBackdropColor(0,0,0,0.7) end
-  blocker:SetBackdropColor(0, 0, 0, 0.40)
   blocker:Hide()
   blocker:SetScript("OnClick", function() end) -- swallow clicks
   self.blocker = blocker
@@ -24,48 +23,68 @@ function UI:EnsureEditor()
   -- Modal frame
   local ed = CreateFrame("Frame", ADDON_NAME.."Editor", blocker, "BackdropTemplate")
 
--- Confirmation dialogs
-if not StaticPopupDialogs["GNOTES_CONFIRM_SAVE"] then
-  StaticPopupDialogs["GNOTES_CONFIRM_SAVE"] = {
-    text = "Save changes to this note?",
-    button1 = YES, button2 = NO,
-    OnAccept = function()
-      local UI = ns.UI
-      local name = UI.nameBox and UI.nameBox:GetText() or ""
-      if name == "" then return end
-      local data = {
-        name  = name,
-        guild = UI.guildBox and UI.guildBox:GetText() or "",
-        class = UI.selectedClass,
-        race  = UI.selectedRace,
-        status= UI.selectedStatus or "S",
-        note  = UI.noteBox and UI.noteBox:GetText() or "",
-      }
-      if GuildNotes and GuildNotes.AddOrEditEntry then
-        GuildNotes:AddOrEditEntry(name, data)
-      end
-      if UI.editor then UI.editor:Hide() end
-      if UI.blocker then UI.blocker:Hide() end
-    end,
-    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-  }
-end
-if not StaticPopupDialogs["GNOTES_CONFIRM_DELETE"] then
-  StaticPopupDialogs["GNOTES_CONFIRM_DELETE"] = {
-    text = "Delete this note?",
-    button1 = YES, button2 = NO,
-    OnAccept = function()
-      local UI = ns.UI
-      if not UI.currentKey then return end
-      if GuildNotes and GuildNotes.DeleteEntry then
-        GuildNotes:DeleteEntry(UI.currentKey)
-      end
-      if UI.editor then UI.editor:Hide() end
-      if UI.blocker then UI.blocker:Hide() end
-    end,
-    timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-  }
-end
+  -- ESC handling on EDITOR only: close editor, do not propagate to main or Game Menu
+  ed:EnableKeyboard(true)
+  if ed.SetPropagateKeyboardInput then ed:SetPropagateKeyboardInput(true) end
+  ed:SetScript("OnKeyDown", function(self, key)
+    if key == "ESCAPE" then
+      if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
+      self:Hide()
+      if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(true) end
+    end
+  end)
+
+  -- Ensure the blocker is released when editor hides
+  ed:SetScript("OnHide", function()
+    if UI.blocker then
+      UI.blocker:Hide()
+      if UI.blocker.EnableMouse then UI.blocker:EnableMouse(false) end
+    end
+  end)
+
+  -- Confirmation dialogs
+  if not StaticPopupDialogs["GNOTES_CONFIRM_SAVE"] then
+    StaticPopupDialogs["GNOTES_CONFIRM_SAVE"] = {
+      text = "Save changes to this note?",
+      button1 = YES, button2 = NO,
+      OnAccept = function()
+        local UI = ns.UI
+        local name = UI.nameBox and UI.nameBox:GetText() or ""
+        if name == "" then return end
+        local data = {
+          name  = name,
+          guild = UI.guildBox and UI.guildBox:GetText() or "",
+          class = UI.selectedClass,
+          race  = UI.selectedRace,
+          status= UI.selectedStatus or "S",
+          note  = UI.noteBox and UI.noteBox:GetText() or "",
+        }
+        if GuildNotes and GuildNotes.AddOrEditEntry then
+          GuildNotes:AddOrEditEntry(name, data)
+        end
+        if UI.editor then UI.editor:Hide() end
+        if UI.blocker then UI.blocker:Hide() end
+      end,
+      timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+    }
+  end
+  if not StaticPopupDialogs["GNOTES_CONFIRM_DELETE"] then
+    StaticPopupDialogs["GNOTES_CONFIRM_DELETE"] = {
+      text = "Delete this note?",
+      button1 = YES, button2 = NO,
+      OnAccept = function()
+        local UI = ns.UI
+        if not UI.currentKey then return end
+        if GuildNotes and GuildNotes.DeleteEntry then
+          GuildNotes:DeleteEntry(UI.currentKey)
+        end
+        if UI.editor then UI.editor:Hide() end
+        if UI.blocker then UI.blocker:Hide() end
+      end,
+      timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+    }
+  end
+
   ed:SetSize(520, 360)
   ed:SetPoint("CENTER")
   ed:SetFrameLevel(blocker:GetFrameLevel() + 1)
@@ -98,12 +117,26 @@ end
   nameBox:SetPoint("TOPLEFT", 16, -58)
   self.nameBox = nameBox
 
+  -- TAB: Name -> Guild
+  self.nameBox:SetScript("OnTabPressed", function()
+    if UI.guildBox and UI.guildBox.SetFocus then UI.guildBox:SetFocus() end
+  end)
+  -- ESC: just unfocus
+  self.nameBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
   -- Guild
   Label(ed, "Guild", 16, -86)
   local guildBox = CreateFrame("EditBox", nil, ed, "InputBoxTemplate")
   guildBox:SetSize(200, 20); guildBox:SetAutoFocus(false)
   guildBox:SetPoint("TOPLEFT", 16, -104)
   self.guildBox = guildBox
+
+  -- TAB: Guild -> Note
+  self.guildBox:SetScript("OnTabPressed", function()
+    if UI.noteBox and UI.noteBox.SetFocus then UI.noteBox:SetFocus() end
+  end)
+  -- ESC: just unfocus
+  self.guildBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
   -- Class dropdown
   Label(ed, "Class", 16, -132)
@@ -151,12 +184,12 @@ end
   end)
   self.raceDrop = raceDrop
 
-  -- Status dropdown (includes new Skull/Griefer)
+  -- Status dropdown
   Label(ed, "Status", 16, -220)
   local statusDrop = CreateFrame("Frame", nil, ed, "UIDropDownMenuTemplate")
   statusDrop:SetPoint("TOPLEFT", 6, -236)
   local statusItems = {
-    {id="G"}, {id="S"}, {id="C"}, {id="A"}, {id="K"}, 
+    {id="G"}, {id="S"}, {id="C"}, {id="A"}, {id="K"},
   }
   UIDropDownMenu_Initialize(statusDrop, function()
     for _,item in ipairs(statusItems) do
@@ -176,17 +209,18 @@ end
   end)
   self.statusDrop = statusDrop
 
--- Author / Updated (read-only info)
-local metaLabel = ed:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-metaLabel:SetPoint("TOPLEFT", 16, -268)
-metaLabel:SetText("")
-self.metaLabel = metaLabel
-    if self.metaLabel.SetJustifyH then self.metaLabel:SetJustifyH("LEFT") end
-    if self.metaLabel.SetWidth then self.metaLabel:SetWidth(360) end
-    if self.metaLabel.SetFont then
-      local f, h = self.metaLabel:GetFont()
-      self.metaLabel:SetFont(f, h+1)
-    end
+  -- Author / Updated (read-only info)
+  local metaLabel = ed:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  metaLabel:SetPoint("TOPLEFT", 16, -268)
+  metaLabel:SetText("")
+  self.metaLabel = metaLabel
+  if self.metaLabel.SetJustifyH then self.metaLabel:SetJustifyH("LEFT") end
+  if self.metaLabel.SetWidth then self.metaLabel:SetWidth(360) end
+  if self.metaLabel.SetFont then
+    local fnt, h = self.metaLabel:GetFont()
+    self.metaLabel:SetFont(fnt, h+1)
+  end
+
   self.setStatus = function(status)
     UI.selectedStatus = status
     local lbl = (ns.StatusLabel and ns:StatusLabel(status)) or status
@@ -214,6 +248,9 @@ self.metaLabel = metaLabel
   note:SetTextInsets(8,8,8,8)
   self.noteBox = note
 
+  -- ESC: just unfocus note
+  self.noteBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
   -- Buttons
   local saveBtn = CreateFrame("Button", nil, ed, "UIPanelButtonTemplate")
   saveBtn:SetSize(96, 22); saveBtn:SetText("Save"); saveBtn:SetPoint("BOTTOMRIGHT", ed, "BOTTOMRIGHT", -16, 14)
@@ -223,7 +260,6 @@ self.metaLabel = metaLabel
     if isEdit then
       StaticPopup_Show("GNOTES_CONFIRM_SAVE")
     else
-      -- Even for Add, ask to confirm as requested
       StaticPopup_Show("GNOTES_CONFIRM_SAVE")
     end
   end)
@@ -239,21 +275,28 @@ self.metaLabel = metaLabel
   local cancelBtn = CreateFrame("Button", nil, ed, "UIPanelButtonTemplate")
   cancelBtn:SetSize(96, 22); cancelBtn:SetText("Cancel")
   cancelBtn:SetPoint("RIGHT", deleteBtn, "LEFT", -8, 0)
-  cancelBtn:SetScript("OnClick", function() UI.editor:Hide(); UI.blocker:Hide() end)
+  cancelBtn:SetScript("OnClick", function()
+    if UI.editor then UI.editor:Hide() end
+    if UI.blocker then UI.blocker:Hide() end
+  end)
 end
 
 function UI:OpenEditor(key)
   if not self.frame then self:Init() end
   self:EnsureEditor()
 
-  if self.blocker then self.blocker:Show() end
+  -- Show blocker & capture clicks while editor is open
+  if self.blocker then
+    self.blocker:Show()
+    if self.blocker.EnableMouse then self.blocker:EnableMouse(true) end
+  end
+
   self.editor:Show()
   self.currentKey = key
   self:RecomputePermissions()
   if self.saveBtn then self.saveBtn:SetEnabled(self.canEdit ~= false) end
 
   if key and GuildNotes and GuildNotes.GetEntry then
-    self.saveBtn:SetText("Save")
     self.saveBtn:SetText("Save")
     self.deleteBtn:SetShown(self.canEdit)
 
@@ -287,18 +330,17 @@ function UI:OpenEditor(key)
     end
     self.noteBox:SetText(e.note or "")
 
-if self.metaLabel then
-  local author = e.author or ""
-  local updated = e.updated and (date and date("!%Y-%m-%d %H:%M", e.updated) or tostring(e.updated)) or ""
-  if author ~= "" or updated ~= "" then
-    local who = (author ~= "" and (author:gsub("%-.*$", ""))) or "unknown"
-    local when = (updated ~= "" and updated) or ""
-    local sep = (who ~= "" and when ~= "" and " • ") or ""
-      self.metaLabel:SetText("By: "..(who or "?").."\nDate: "..when)
-  else
-    self.metaLabel:SetText("")
-  end
-end
+    if self.metaLabel then
+      local author = e.author or ""
+      local updated = e.updated and (date and date("!%Y-%m-%d %H:%M", e.updated) or tostring(e.updated)) or ""
+      if author ~= "" or updated ~= "" then
+        local who = (author ~= "" and (author:gsub("%-.*$", ""))) or "unknown"
+        local when = (updated ~= "" and updated) or ""
+        self.metaLabel:SetText("By: "..(who or "?").."\nDate: "..when)
+      else
+        self.metaLabel:SetText("")
+      end
+    end
 
   else
     self.saveBtn:SetText("Add"); if self.saveBtn then self.saveBtn:SetEnabled(true) end
