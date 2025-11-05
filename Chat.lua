@@ -81,7 +81,6 @@ SetItemRef = function(link, text, button, chatFrame)
         if GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
       end
     end
-    return
   end
   return _GN_OrigSetItemRef(link, text, button, chatFrame)
 end
