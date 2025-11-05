@@ -1,7 +1,7 @@
 local ADDON_NAME, ns = ...
 
 ns.PRFX = "GuildNotes"
-ns.VERSION = "2.0.0"
+ns.VERSION = "2.0.1"
 
 function ns:Debug(...) if ns.db and ns.db.debug then print("|cff88c0d0[GuildNotes]|r", ...) end end
 

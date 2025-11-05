@@ -52,7 +52,7 @@ if type(_G.UnitPopup_ShowMenu) == "function" and hooksecurefunc then
     info.text = "|TInterface/ICONS/INV_Scroll_03:16|t Add note"
     info.notCheckable = true
     info.func = function() PrefillEditor((targetName or ""):gsub("%-.*$","")) end
-    UIDropDownMenu_AddButton(info, UIDROPDOWNMENU_MENU_LEVEL or 1)
+    UIDropDownMenu_AddButton(info, UIDROPDOWNMENU_MENUdebug = true_LEVEL or 1)
   end
   hooksecurefunc("UnitPopup_ShowMenu", AddClassicItem)
 end
