@@ -1,7 +1,7 @@
 ## Interface: 11505
 ## Title: GuildNotes
-## Author: Deepbussy
-## Version: 2.0.1
+## Author: Deepbussy-Soulseeker
+## Version: 2.1.0
 ## SavedVariables: GuildNotesDB
 
 LibStub.lua

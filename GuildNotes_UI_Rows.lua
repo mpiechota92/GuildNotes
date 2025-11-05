@@ -1,5 +1,6 @@
 -- GuildNotes_UI_Rows.lua
--- Render rows using a simple wheel-driven offset (no FauxScroll).
+-- Row rendering and tooltip with "GuildNote: <icon> <label>"
+
 local ADDON_NAME, ns = ...
 ns.UI = ns.UI or {}
 local UI = ns.UI
@@ -45,47 +46,61 @@ local function CreateRow(parent, i, getWidth)
   row:SetScript("OnEnter", function(self) self.bg:Show() end)
   row:SetScript("OnLeave", function(self) self.bg:Hide(); GameTooltip:Hide() end)
 
+  -- Columns
   for _,c in ipairs(UI.COLS) do
-    row[c.key] = row:CreateFontString(nil, "OVERLAY", c.key=="name" and "GameFontNormal" or "GameFontHighlight")
+    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    row[c.key] = fs
   end
-
-  row.statusHit = CreateFrame("Button", nil, row)
-  row.statusHit:SetAllPoints(row.status)
-  row.statusHit:SetScript("OnEnter", function(self)
-    if self.statusCode and ns.StatusLabel then
-      GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
-      GameTooltip:SetText(ns:StatusLabel(self.statusCode))
-      GameTooltip:Show()
-    end
-  end)
-  row.statusHit:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-  row:SetScript("OnClick", function(self)
-    if self.key and UI.canEdit and UI.OpenEditor then UI:OpenEditor(self.key) end
-  end)
-
-  row:SetScript("OnSizeChanged", function(self, w) LayoutColumns(self, w) end)
   LayoutColumns(row, getWidth())
+
+  row:SetScript("OnSizeChanged", function(selfW) LayoutColumns(selfW, getWidth()) end)
+
+  -- Tooltip with status ICON + label, prefixed by "GuildNote:"
+  row:SetScript("OnEnter", function(selfW)
+    selfW.bg:Show()
+    if not selfW.key then return end
+    local e = GuildNotes and GuildNotes:GetEntry(selfW.key) or {}
+    if not e or e._deleted then return end
+
+    GameTooltip:SetOwner(selfW, "ANCHOR_CURSOR")
+
+    local name = e.name or selfW.key:match("^[^-]+") or selfW.key
+    GameTooltip:AddLine(name, 1, 0.82, 0)
+    if e.guild and e.guild ~= "" then
+      GameTooltip:AddLine("<"..e.guild..">", 1, 0.5, 1)
+    end
+
+    local classPretty = (ns.ClassPretty and ns.ClassPretty(e.class)) or (e.class or "")
+    local racePretty  = (ns.RacePretty  and ns.RacePretty(e.race )) or (e.race  or "")
+    local crLine = (classPretty ~= "" or racePretty ~= "") and (string.format("%s %s", racePretty, classPretty):gsub("^%s+",""):gsub("%s+$","")) or nil
+    if crLine and crLine ~= "" then GameTooltip:AddLine(crLine, 1, 1, 1) end
+
+    local st    = ns.GetStatus and ns:GetStatus(e) or (e.status or "S")
+    local icon  = ns.StatusIcon3 and ns:StatusIcon3(st) or ""
+    local label = ns.StatusLabel and ns:StatusLabel(st) or st
+    GameTooltip:AddLine(("GuildNote: %s%s"):format(icon ~= "" and (icon.." ") or "", label), 1, 1, 1)
+
+    GameTooltip:Show()
+  end)
 
   return row
 end
 
 function UI:EnsureRows()
-  -- Ensure we have a sensible number of visible rows based on list height.
   if not self.list then return end
-  local avail = tonumber(self.list:GetHeight()) or 0
-  local rh    = (self.ROW_HEIGHT or 22)
-  local needed = math.floor(avail / rh)
-  if not needed or needed < 1 then needed = 12 end
+  local h = self.list:GetHeight() or 0
+  local rh = (self.ROW_HEIGHT or 22)
+  local needed = math.max(1, math.floor(h / rh))
 
-  if needed == (self.visibleRows or 0) and self.rows and #self.rows >= needed then return end
-
-  self.rows = self.rows or {}
-  for i = (self.visibleRows or 0) + 1, needed do
-    local row = CreateRow(self.list, i, function() return UI.list:GetWidth() or 800 end)
-    row:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, -((i-1)*rh))
-    row:SetPoint("TOPRIGHT", self.list, "TOPRIGHT", 0, -((i-1)*rh))
-    self.rows[i] = row
+  for i = 1, needed do
+    if not self.rows[i] then
+      self.rows[i] = CreateRow(self.list, i, function() return self.list:GetWidth() end)
+      if i == 1 then
+        self.rows[i]:SetPoint("TOPLEFT", self.list, "TOPLEFT", 0, 0)
+      else
+        self.rows[i]:SetPoint("TOPLEFT", self.rows[i-1], "BOTTOMLEFT", 0, -2)
+      end
+    end
   end
   for i = needed + 1, #self.rows do
     if self.rows[i] then self.rows[i]:Hide() end
@@ -98,12 +113,10 @@ function UI:RenderRows(keys, offset)
   local total = #keys
   local rh    = (self.ROW_HEIGHT or 22)
 
-  -- Make sure container is tall enough for anchors
   self.list:SetHeight(math.max(self.visibleRows or 0, total) * rh)
 
   local inGroup = ns.GetCurrentGroupNames and ns:GetCurrentGroupNames() or {}
 
-  -- Render a window of size visibleRows starting at offset+1
   for i = 1, (self.visibleRows or 0) do
     local idx = offset + i
     local row = self.rows[i]
@@ -112,7 +125,6 @@ function UI:RenderRows(keys, offset)
       local e = (GuildNotes and GuildNotes:GetEntry(key))
              or (GuildNotesDB and GuildNotesDB.notes and GuildNotesDB.notes[key])
              or {}
-
       row:Show(); row.key = key
 
       local r,g,b = 1,1,1
@@ -126,7 +138,6 @@ function UI:RenderRows(keys, offset)
 
       row.guild:SetText(e.guild or "-")
 
-      -- class helpers (function or table)
       local classIcon   = (type(ns.ClassIcon)   == "function") and ns.ClassIcon(e.class)
                         or (ns.CLASS_ICON and ns.CLASS_ICON[e.class]) or nil
       local classPretty = (type(ns.ClassPretty) == "function") and ns.ClassPretty(e.class)
@@ -134,7 +145,6 @@ function UI:RenderRows(keys, offset)
       local classText   = (ns.CellWithIcon and ns.CellWithIcon(classIcon, classPretty)) or classPretty
       row.class:SetText(classText)
 
-      -- race helpers
       local raceIcon    = (type(ns.RaceIcon)    == "function") and ns.RaceIcon(e.race)
                         or (ns.RACE_ICON and ns.RACE_ICON[e.race]) or nil
       local racePretty  = (type(ns.RacePretty)  == "function") and ns.RacePretty(e.race)

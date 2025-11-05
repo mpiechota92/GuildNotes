@@ -1,95 +1,133 @@
--- Context.lua (safe for Retail & Classic)
+-- Chat.lua
+-- Adds a clickable [Note <icon>] tag in chat for players who have a GuildNotes entry.
+-- Clicking the tag opens the GuildNotes UI filtered to that player.
+-- Also enriches the unit tooltip with: "GuildNote: <icon> <label>".
+
 local ADDON_NAME, ns = ...
 
+GuildNotesChat = GuildNotesChat or {}
+local Chat = GuildNotesChat
+
+-- ---------------------------------------------------------------------------
 -- Helpers
-local function SanitizeFull(full)
-  if not full then return nil end
-  full = full:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%-$","")
-  if full == "" then return nil end
-  return full
-end
-local function NormalizeRaceToken(r)
-  if not r then return nil end
-  return (r=="Night Elf" or r=="NightElf" or r=="Nightelf") and "NightElf" or r
-end
-local function ResolveFromUnit(unit)
-  if unit and UnitExists(unit) then
-    local name, realm = UnitName(unit)
-    local full = SanitizeFull(realm and (name.."-"..realm) or name)
-    local class = select(2, UnitClass(unit))
-    local race  = NormalizeRaceToken(select(2, UnitRace(unit)))
-    local guild = GetGuildInfo(unit)
-    return full, class, race, guild
-  end
-  return nil
-end
-local function ResolveFromGUID(guid)
-  if not guid then return nil end
-  local _, class, _, race, _, name, realm = GetPlayerInfoByGUID(guid)
-  local full = SanitizeFull(name and (realm and (name.."-"..realm) or name) or nil)
-  return full, class, NormalizeRaceToken(race), nil
-end
-local function OpenEditorPrefilled(full, class, race, guild)
-  if not GuildNotesUI then return end
-  full = SanitizeFull(full); if not full then return end
-  if GuildNotesUI.OpenEditorPrefilled then
-    GuildNotesUI:OpenEditorPrefilled(full, class, race, guild); return
-  end
-  if GuildNotesUI.Toggle then GuildNotesUI:Toggle() end
-  if GuildNotesUI.OpenEditor then GuildNotesUI:OpenEditor(nil) end
-  if GuildNotesUI.nameBox then GuildNotesUI.nameBox:SetText(full) end
-  if GuildNotesUI.guildBox then GuildNotesUI.guildBox:SetText(guild or "") end
+-- ---------------------------------------------------------------------------
+
+local function HasNote(full)
+  if not full or not GuildNotes or not GuildNotes.GetEntry then return false end
+  local e = GuildNotes:GetEntry(full)
+  return e and not e._deleted
 end
 
--- Retail Menu API (if present)
-do
-  if Menu and Menu.ModifyMenu then
-    local function AddMenuItem(owner, parent, data)
-      parent:CreateDivider()
-      parent:CreateButton("Add note", function()
-        local full, class, race, guild
-        if data and data.playerLocation and C_PlayerInfo and C_PlayerInfo.GetGUIDFromPlayerLocation then
-          local guid = C_PlayerInfo.GetGUIDFromPlayerLocation(data.playerLocation)
-          if guid then full, class, race, guild = ResolveFromGUID(guid) end
+local function StatusIconFor(full)
+  if not (ns and ns.StatusIcon3 and GuildNotes and GuildNotes.GetEntry) then return "" end
+  local e = GuildNotes:GetEntry(full)
+  if not e then return "" end
+  local st = (ns.GetStatus and ns:GetStatus(e)) or e.status or "S"
+  return ns:StatusIcon3(st) or ""
+end
+
+-- Build a CLICKABLE tag using Blizzard's "player" link so it never prints raw.
+-- We stash a marker "GN" as the 4th field: |Hplayer:<full>:0:GN|h[Note <icon>]|h
+local function BuildClickableTag(full)
+  local icon = StatusIconFor(full)
+  local inner = (icon ~= "" and ("Note "..icon)) or "Note"
+  return "|cffA3BE8C|Hplayer:"..full..":0:GN|h["..inner.."]|h|r"
+end
+
+local function KeyForAuthor(author)
+  -- author is usually "Name-Realm"; if not, ns:PlayerKey will add realm.
+  if not author or author == "" then return nil end
+  if ns and ns.PlayerKey then return ns:PlayerKey(author) end
+  return author
+end
+
+-- ---------------------------------------------------------------------------
+-- Chat filter: prepend our clickable tag
+-- ---------------------------------------------------------------------------
+
+local FILTERED = {
+  "CHAT_MSG_SAY","CHAT_MSG_YELL","CHAT_MSG_GUILD",
+  "CHAT_MSG_PARTY","CHAT_MSG_PARTY_LEADER",
+  "CHAT_MSG_RAID","CHAT_MSG_RAID_LEADER",
+  "CHAT_MSG_WHISPER","CHAT_MSG_CHANNEL",
+  -- add if you want:
+  -- "CHAT_MSG_INSTANCE_CHAT","CHAT_MSG_INSTANCE_CHAT_LEADER",
+}
+
+local function OnChatFilter(self, event, msg, author, ...)
+  local key = KeyForAuthor(author)
+  if key and HasNote(key) then
+    local tag = BuildClickableTag(key)
+    return false, (tag.." "..(msg or "")), author, ...
+  end
+  return false, msg, author, ...
+end
+
+-- ---------------------------------------------------------------------------
+-- Click handler: intercept only our special player link (4th field == "GN")
+-- ---------------------------------------------------------------------------
+
+local _GN_OrigSetItemRef = SetItemRef
+SetItemRef = function(link, text, button, chatFrame)
+  local typ, rest = link:match("^(.-):(.*)$")
+  if typ == "player" and rest then
+    -- player link shape: name[:lineID[:chatType[:extra]]]
+    local name, lineID, chatType, extra = rest:match("^([^:]*):?([^:]*):?([^:]*):?(.*)$")
+    if extra == "GN" then
+      local full = name
+      if GuildNotesUI and GuildNotesUI.Toggle then
+        GuildNotesUI:Toggle()
+        if GuildNotesUI.searchBox and full then
+          local nameOnly = full:match("^[^-]+") or full
+          GuildNotesUI.searchBox:SetText(nameOnly)
+          if GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
         end
-        if (not full) and owner and owner.unit then full, class, race, guild = ResolveFromUnit(owner.unit) end
-        if (not full) and data and data.name then full = SanitizeFull(data.name) end
-        if full then OpenEditorPrefilled(full, class, race, guild) end
-      end)
+      end
+      return
     end
-    local TAGS = {
-      "MENU_UNIT_ENEMY_PLAYER", "MENU_UNIT_FRIEND", "MENU_UNIT_PARTY",
-      "MENU_UNIT_PLAYER", "MENU_UNIT_RAID_PLAYER", "MENU_CHAT_PLAYER", "MENU_FRIEND",
-    }
-    for _, tag in ipairs(TAGS) do Menu.ModifyMenu(tag, AddMenuItem) end
+  end
+  return _GN_OrigSetItemRef(link, text, button, chatFrame)
+end
+
+-- ---------------------------------------------------------------------------
+-- Tooltip enrichment: "GuildNote: <icon> <label>"
+-- ---------------------------------------------------------------------------
+
+GameTooltip:HookScript("OnTooltipSetUnit", function(tt)
+  local _, unit = tt:GetUnit()
+  unit = unit or "mouseover"
+  if not unit or not UnitExists(unit) then return end
+
+  local name, realm = UnitName(unit)
+  if not name then return end
+
+  local full = realm and (name.."-"..realm) or name
+  local key  = ns and ns.PlayerKey and ns:PlayerKey(full) or full
+  if not (GuildNotes and GuildNotes.GetEntry and key) then return end
+
+  local e = GuildNotes:GetEntry(key)
+  if e and not e._deleted then
+    local st    = (ns.GetStatus and ns:GetStatus(e)) or e.status or "S"
+    local icon  = (ns.StatusIcon3 and ns:StatusIcon3(st)) or ""
+    local label = (ns.StatusLabel  and ns:StatusLabel(st)) or st
+    tt:AddLine(("GuildNote: %s%s"):format(icon ~= "" and (icon.." ") or "", label), 1, 1, 1)
+    tt:Show()
+  end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Init
+-- ---------------------------------------------------------------------------
+
+function Chat:Init()
+  for _,ev in ipairs(FILTERED) do
+    ChatFrame_AddMessageEventFilter(ev, OnChatFilter)
   end
 end
 
--- Classic dropdown API (only if present)
-do
-  if type(_G.UnitPopup_ShowMenu) == "function" and hooksecurefunc then
-    local SUPPORTED = {
-      PLAYER=true, PARTY=true, RAID_PLAYER=true, FRIEND=true,
-      TARGET=true, CHAT_ROSTER=true, BN_FRIEND=true
-    }
-    local function prefill(name)
-      if not GuildNotesUI then return end
-      GuildNotesUI:Toggle()
-      GuildNotesUI:OpenEditor(nil)
-      if GuildNotesUI.nameBox then GuildNotesUI.nameBox:SetText(name or "") end
-    end
-    hooksecurefunc("UnitPopup_ShowMenu", function(dropdownMenu, which, unit, name)
-      if not SUPPORTED[which] then return end
-      local targetName = dropdownMenu and dropdownMenu.name or name
-      if (not targetName or targetName=="") and unit and UnitExists(unit) then
-        targetName = Ambiguate(UnitName(unit), "none")
-      end
-      if not targetName or targetName=="" then return end
-      local info = UIDropDownMenu_CreateInfo()
-      info.text = "|TInterface/ICONS/INV_Scroll_03:16|t Add note"
-      info.notCheckable = true
-      info.func = function() prefill((targetName or ""):gsub("%-.*$","")) end
-      UIDropDownMenu_AddButton(info, UIDROPDOWNMENU_MENU_LEVEL or 1)
-    end)
-  end
+-- auto-boot
+if not Chat._boot then
+  Chat._boot = CreateFrame("Frame")
+  Chat._boot:RegisterEvent("PLAYER_LOGIN")
+  Chat._boot:SetScript("OnEvent", function() Chat:Init() end)
 end
