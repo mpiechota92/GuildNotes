@@ -172,3 +172,10 @@ SLASH_GUILDNOTES1 = "/gnotes"
 SlashCmdList["GUILDNOTES"] = function()
   if GuildNotesUI and GuildNotesUI.Toggle then GuildNotesUI:Toggle() end
 end
+
+SLASH_GNOTESDEBUG1 = "/gnotesdebug"
+SlashCmdList["GNOTESDEBUG"] = function()
+  if type(ns.db) ~= "table" then return end
+  ns.db.debug = not ns.db.debug
+  print("|cff88c0d0[GuildNotes]|r Debug is now", ns.db.debug and "|cff00ff00ON|r" or "|cffff0000OFF|r")
+end

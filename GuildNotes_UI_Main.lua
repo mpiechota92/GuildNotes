@@ -1,9 +1,46 @@
 -- GuildNotes_UI_Main.lua
--- Frame, header, search box, and list rendering WITH paging footer (no wheel scrolling).
+-- Frame, header, search box, and list rendering WITH paging footer + mouse wheel paging.
 
 local ADDON_NAME, ns = ...
 ns.UI = ns.UI or {}
 local UI = ns.UI
+local UpdateFooter  -- forward declaration
+
+-- Page-based wheel scrolling: move exactly one page per step (no overlaps)
+function UI:ScrollOffsetBy(n)
+  -- n: positive = next page, negative = previous page (we clamp)
+  local per   = math.max(self.visibleRows or 0, 1)
+  local keys  = self.sortedKeys or {}
+  local total = #keys
+
+  -- total pages
+  local totalPages = (total > 0) and math.ceil(total / per) or 0
+  if totalPages == 0 then
+    self.pageIndex = 0
+    self.offset    = 0
+    if self.RenderRows then self:RenderRows({}, 0) end
+    UpdateFooter(self)
+    return
+  end
+
+  -- move exactly one page per wheel tick
+  local dir = (n or 0)
+  if dir > 0 then dir = 1 elseif dir < 0 then dir = -1 else dir = 0 end
+
+  -- clamp page index
+  local page = (self.pageIndex or 1) + dir
+  if page < 1 then page = 1 end
+  if page > totalPages then page = totalPages end
+  self.pageIndex = page
+
+  -- page-aligned offset
+  self.offset = (page - 1) * per
+
+  -- render & update footer
+  if self.RenderRows then self:RenderRows(keys, self.offset) end
+  UpdateFooter(self)
+end
+
 
 local function CreateDropdown(parent, items, onSelect, width)
   local dd = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
@@ -24,9 +61,9 @@ end
 
 -- Utils
 local function ceildiv(a,b) if b<=0 then return 0 end return math.floor((a + b - 1) / b) end
-local function clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return v end return v end
+local function clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return hi end return v end
 
-local function UpdateFooter(self)
+function UpdateFooter(self)
   if not self.pageFooter then return end
   local totalPages = self.totalPages or 0
   local page = self.pageIndex or 0
@@ -60,6 +97,13 @@ function UI:Init()
   local f = CreateFrame("Frame", ADDON_NAME.."Main", UIParent, "BackdropTemplate")
   f:SetSize(980, 470)
   f:SetPoint("CENTER")
+  -- Make it draggable
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function(self) self:StartMoving() end)
+  f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+  -- f:SetUserPlaced(true)
   f:SetBackdrop({
     bgFile="Interface/DialogFrame/UI-DialogBox-Background",
     edgeFile="Interface/Tooltips/UI-Tooltip-Border", edgeSize=14,
@@ -71,11 +115,12 @@ function UI:Init()
   f:Hide()
   self.frame = f
 
-  -- ESC handling
+  -- ESC handling on MAIN: close editor first (if open) else close main; do not propagate to Game Menu
   f:EnableKeyboard(true)
   if f.SetPropagateKeyboardInput then f:SetPropagateKeyboardInput(true) end
   f:SetScript("OnKeyDown", function(selfFrame, key)
     if key == "ESCAPE" then
+      if selfFrame.SetPropagateKeyboardInput then selfFrame:SetPropagateKeyboardInput(false) end
       if UI.editor and UI.editor:IsShown() then
         UI.editor:Hide()
       else
@@ -99,7 +144,8 @@ function UI:Init()
   self.searchBox = search
 
   local addBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  addBtn:SetSize(120, 22); addBtn:SetText("Add"); addBtn:SetPoint("LEFT", search, "RIGHT", 8, 0)
+  addBtn:SetSize(120, 22); addBtn:SetText("Add")
+  addBtn:Enable(); addBtn:SetPoint("LEFT", search, "RIGHT", 8, 0)
   addBtn:SetScript("OnClick", function() UI:OpenEditor(nil) end)
   self.addBtn = addBtn
 
@@ -183,6 +229,55 @@ function UI:Init()
   pageArea:SetPoint("RIGHT", btnContainer, "LEFT", -12, 0) -- keep gap from the arrows
   pageArea:SetHeight(24)
 
+  -- Centered "Page X of Y" text
+  local pageText = pageArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  pageText:SetPoint("CENTER", pageArea, "CENTER", 0, 0)
+  pageText:SetJustifyH("CENTER")
+  pageText:SetText("Page 0 of 0")
+  footer.pageText = pageText
+
+  -- List container above the footer
+  local list = CreateFrame("Frame", ADDON_NAME.."List", f)
+  list:SetPoint("TOPLEFT", 12, -86)
+  list:SetPoint("BOTTOMLEFT", footer, "TOPLEFT", 0, 6)
+  list:SetPoint("BOTTOMRIGHT", footer, "TOPRIGHT", 0, 6)
+  self.list = list
+
+  -- Mouse wheel page scrolling (one full page per notch)
+  self.list:EnableMouse(true)
+  self.list:EnableMouseWheel(true)
+  self.list:SetScript("OnMouseWheel", function(_, delta)
+    local page = UI.visibleRows or 1
+    if ns and ns.Debug then ns:Debug("Wheel", "delta=", delta, "page=", page, "offset=", UI.offset or 0) end
+    if delta > 0 then
+      UI:ScrollOffsetBy(-page)   -- up = previous page
+    else
+      UI:ScrollOffsetBy( page )  -- down = next page
+    end
+  end)
+  footer.prev = prev
+
+  -- Next button
+  local nextb = CreateFrame("Button", nil, btnContainer)
+  nextb:SetSize(24, 24)
+  nextb:SetPoint("RIGHT", btnContainer, "RIGHT", 0, 0)
+  nextb:SetNormalTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Up")
+  nextb:SetPushedTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Down")
+  nextb:SetDisabledTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Disabled")
+  nextb:SetScript("OnClick", function()
+    if (UI.pageIndex or 0) < (UI.totalPages or 0) then
+      UI.pageIndex = UI.pageIndex + 1
+      UI:Refresh()
+    end
+  end)
+  footer.next = nextb
+
+  -- Safe text area that automatically shrinks if we add more buttons on the right
+  local pageArea = CreateFrame("Frame", nil, footer)
+  pageArea:SetPoint("LEFT", footer, "LEFT", 0, 0)
+  pageArea:SetPoint("RIGHT", btnContainer, "LEFT", -12, 0) -- keep gap from the arrows
+  pageArea:SetHeight(24)
+
   -- Centered "Page X of Y" text (replaces the old 2/2 location)
   local pageText = pageArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   pageText:SetPoint("CENTER", pageArea, "CENTER", 0, 0)
@@ -206,6 +301,8 @@ function UI:Init()
   self.pageIndex = 1
   self.totalLines = 0
   self.totalPages = 0
+  self.offset = 0
+  self.sortedKeys = {}
 
   -- Keep rows sized when window changes
   list:SetScript("OnSizeChanged", function() UI:EnsureRows(); UI:Refresh() end)
@@ -222,6 +319,7 @@ function UI:ShowAndFocusSearch(text)
   self.frame:Show()
   self.searchBox:SetText(text or ""); self.searchBox:SetFocus()
   self.pageIndex = 1
+  self.offset = 0
   self:Refresh()
 end
 
@@ -240,20 +338,29 @@ function UI:Refresh()
            or (GuildNotes and GuildNotes.FilteredKeys and GuildNotes:FilteredKeys(query))
            or {}
 
+  -- keep sorted keys for wheel scrolling logic
+  self.sortedKeys = keys
+
   local total = #keys
   self.totalLines = total
 
   -- (Re)compute pages based on search results and visible rows
   RecomputePages(self)
 
-  -- Render current page
-  local per = self.visibleRows or 0
-  local offset = 0
-  if (self.totalPages or 0) > 0 and per > 0 then
-    offset = (self.pageIndex - 1) * per
+  -- Compute and clamp pageIndex + offset (page-aligned)
+  local per = math.max(self.visibleRows or 0, 1)
+  if (self.totalPages or 0) == 0 then
+    self.pageIndex = 0
+    self.offset    = 0
+  else
+    if not self.pageIndex or self.pageIndex < 1 then self.pageIndex = 1 end
+    if self.pageIndex > self.totalPages then self.pageIndex = self.totalPages end
+    self.offset = (self.pageIndex - 1) * per
   end
+
+  -- Render current page
   if self.RenderRows then
-    self:RenderRows(keys, offset)
+    self:RenderRows(keys, self.offset)
   end
 
   -- Update footer UI

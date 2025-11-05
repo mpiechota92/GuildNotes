@@ -31,7 +31,7 @@ end
 local function BuildClickableTag(full)
   local icon = StatusIconFor(full)
   local inner = (icon ~= "" and ("Note "..icon)) or "Note"
-  return "|cffA3BE8C|Hplayer:"..full..":0:GN|h["..inner.."]|h|r"
+  return "|cffA3BE8C|Hgnotes:"..full.."|h["..inner.."]|h|r"
 end
 
 local function KeyForAuthor(author)
@@ -64,26 +64,22 @@ local function OnChatFilter(self, event, msg, author, ...)
 end
 
 -- ---------------------------------------------------------------------------
--- Click handler: intercept only our special player link (4th field == "GN")
--- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- Click handler for custom gnotes: links
+-- ---------------------------------------------------------------------------
 local _GN_OrigSetItemRef = SetItemRef
 SetItemRef = function(link, text, button, chatFrame)
   local typ, rest = link:match("^(.-):(.*)$")
-  if typ == "player" and rest then
-    -- player link shape: name[:lineID[:chatType[:extra]]]
-    local name, lineID, chatType, extra = rest:match("^([^:]*):?([^:]*):?([^:]*):?(.*)$")
-    if extra == "GN" then
-      local full = name
-      if GuildNotesUI and GuildNotesUI.Toggle then
-        GuildNotesUI:Toggle()
-        if GuildNotesUI.searchBox and full then
-          local nameOnly = full:match("^[^-]+") or full
-          GuildNotesUI.searchBox:SetText(nameOnly)
-          if GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
-        end
+  if typ == "gnotes" and rest then
+    local full = rest
+    if GuildNotesUI and GuildNotesUI.Toggle then
+      GuildNotesUI:Toggle()
+      if GuildNotesUI.searchBox and full then
+        local nameOnly = full:match("^[^-]+") or full
+        GuildNotesUI.searchBox:SetText(nameOnly)
+        if GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
       end
-      return
     end
   end
   return _GN_OrigSetItemRef(link, text, button, chatFrame)

@@ -52,12 +52,30 @@ local function CreateRow(parent, i, getWidth)
     row[c.key] = fs
   end
   LayoutColumns(row, getWidth())
+  -- NOTE column tooltip (full note, wrapped) – only on the note cell
+  local noteFS = row.note
+  noteFS:EnableMouse(true)
+  noteFS:SetScript("OnEnter", function(self)
+  local key = row.key
+  if not key then return end
+    local e = (GuildNotes and GuildNotes:GetEntry(key))
+         or (GuildNotesDB and GuildNotesDB.notes and GuildNotesDB.notes[key])
+         or {}
+    if not e or not e.note or e.note == "" then return end
+
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("Note", 1, 0.82, 0)
+    GameTooltip:AddLine(e.note, 1, 1, 1, true) -- true = wrap long notes
+    GameTooltip:Show()
+  end)
+  noteFS:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
   row:SetScript("OnSizeChanged", function(selfW) LayoutColumns(selfW, getWidth()) end)
 
   -- Tooltip with status ICON + label, prefixed by "GuildNote:"
   row:SetScript("OnEnter", function(selfW)
     selfW.bg:Show()
+    if MouseIsOver(row.note) then return end
     if not selfW.key then return end
     local e = GuildNotes and GuildNotes:GetEntry(selfW.key) or {}
     if not e or e._deleted then return end
@@ -83,7 +101,28 @@ local function CreateRow(parent, i, getWidth)
     GameTooltip:Show()
   end)
 
-  return row
+  
+-- Click to edit / context menu
+row:RegisterForClicks("AnyUp")
+row:SetScript("OnMouseUp", function(self, button)
+          if GuildNotesUI and GuildNotesUI.canEdit == false then return end
+  if not self.key or not GuildNotesUI then return end
+  if button == "RightButton" then
+    -- open the default UnitPopup menu item we injected (Menu.lua adds it)
+    if UnitPopup_ShowMenu then
+      local nameOnly = (self.key:match("^[^-]+") or self.key)
+      -- Fake a menu for the player name; our Menu.lua hook will add "Add note"
+      ToggleDropDownMenu(1, nil, nil, self, 0, 0)
+    else
+      -- fallback: open editor
+      GuildNotesUI:OpenEditor(self.key)
+    end
+  else
+    -- Left click: open editor for this key
+    GuildNotesUI:OpenEditor(self.key)
+  end
+end)
+return row
 end
 
 function UI:EnsureRows()
