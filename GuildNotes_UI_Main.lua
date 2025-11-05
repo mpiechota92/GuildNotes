@@ -120,6 +120,7 @@ function UI:Init()
   if f.SetPropagateKeyboardInput then f:SetPropagateKeyboardInput(true) end
   f:SetScript("OnKeyDown", function(selfFrame, key)
     if key == "ESCAPE" then
+      if UI and UI._escConsumed then UI._escConsumed = nil; return end
       if selfFrame.SetPropagateKeyboardInput then selfFrame:SetPropagateKeyboardInput(false) end
       if UI.editor and UI.editor:IsShown() then
         UI.editor:Hide()

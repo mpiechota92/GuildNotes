@@ -25,13 +25,9 @@ function UI:EnsureEditor()
 
   -- ESC handling on EDITOR only: close editor, do not propagate to main or Game Menu
   ed:EnableKeyboard(true)
-  if ed.SetPropagateKeyboardInput then ed:SetPropagateKeyboardInput(true) end
+  if ed.SetPropagateKeyboardInput then ed:SetPropagateKeyboardInput(false) end
   ed:SetScript("OnKeyDown", function(self, key)
-    if key == "ESCAPE" then
-      if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(false) end
-      self:Hide()
-      if self.SetPropagateKeyboardInput then self:SetPropagateKeyboardInput(true) end
-    end
+    if key == "ESCAPE" then self:Hide() end
   end)
 
   -- Ensure the blocker is released when editor hides
