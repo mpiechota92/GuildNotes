@@ -255,46 +255,6 @@ function UI:Init()
       UI:ScrollOffsetBy( page )  -- down = next page
     end
   end)
-  footer.prev = prev
-
-  -- Next button
-  local nextb = CreateFrame("Button", nil, btnContainer)
-  nextb:SetSize(24, 24)
-  nextb:SetPoint("RIGHT", btnContainer, "RIGHT", 0, 0)
-  nextb:SetNormalTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Up")
-  nextb:SetPushedTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Down")
-  nextb:SetDisabledTexture("Interface/Buttons/UI-SpellbookIcon-NextPage-Disabled")
-  nextb:SetScript("OnClick", function()
-    if (UI.pageIndex or 0) < (UI.totalPages or 0) then
-      UI.pageIndex = UI.pageIndex + 1
-      UI:Refresh()
-    end
-  end)
-  footer.next = nextb
-
-  -- Safe text area that automatically shrinks if we add more buttons on the right
-  local pageArea = CreateFrame("Frame", nil, footer)
-  pageArea:SetPoint("LEFT", footer, "LEFT", 0, 0)
-  pageArea:SetPoint("RIGHT", btnContainer, "LEFT", -12, 0) -- keep gap from the arrows
-  pageArea:SetHeight(24)
-
-  -- Centered "Page X of Y" text (replaces the old 2/2 location)
-  local pageText = pageArea:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  pageText:SetPoint("CENTER", pageArea, "CENTER", 0, 0)
-  pageText:SetJustifyH("CENTER")
-  pageText:SetText("Page 0 of 0")
-  footer.pageText = pageText
-
-  -- List container above the footer
-  local list = CreateFrame("Frame", ADDON_NAME.."List", f)
-  list:SetPoint("TOPLEFT", 12, -86)
-  list:SetPoint("BOTTOMLEFT", footer, "TOPLEFT", 0, 6)
-  list:SetPoint("BOTTOMRIGHT", footer, "TOPRIGHT", 0, 6)
-  self.list = list
-
-  -- Disable wheel scrolling (paging only)
-  list:EnableMouseWheel(false)
-  list:SetScript("OnMouseWheel", nil)
 
   self.rows = {}
   self.visibleRows = 0
