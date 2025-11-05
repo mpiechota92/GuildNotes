@@ -34,8 +34,8 @@ ns.RACE_ICON = {
 
 function ns.ClassPretty(t) return (t and ns.CLASS_PRETTY[t]) or (t or "?") end
 function ns.ClassIcon(t) return t and ns.CLASS_ICON[t] end
-function ns.RacePretty(t) return (t and ns.RACE_PRETTY[t]) or (t or "?") end
-function ns.RaceIcon(t) return t and ns.RACE_ICON[t] end
+function ns.RacePretty(t)  return (t and ns.RACE_PRETTY[t]) or (t or "?") end
+function ns.RaceIcon(t)    return t and ns.RACE_ICON[t] end
 
 function ns.CellWithIcon(icon, text)
   return icon and ("|T"..icon..":14|t "..(text or "")) or (text or "")
@@ -78,10 +78,36 @@ function ns.TruncateToWidth(fs, text, maxW)
   end
   fs:SetText(best)
 end
+-- === Status helpers ===
+local STATUS_LABEL = {
+  G = "Great player",
+  S = "Safe",
+  C = "Be cautious",
+  A = "Avoid",
+  K = "Griefer",         -- NEW
+}
+function ns:StatusLabel(code)
+  return STATUS_LABEL[code] or code or "S"
+end
 
--- External status helpers expected on ns (provided by the addon):
--- ns:GetStatus(entry) -> "G","S","C","A"
--- ns:StatusLabel(code) -> string
--- ns:StatusIcon3(code) -> icon string
--- ns:RGBForClass(class) -> r,g,b
--- ns:GetCurrentGroupNames() -> set-like table of keys in your group
+-- Extend StatusIcon3 with Skull for "K"
+local _OldStatusIcon3 = ns.StatusIcon3
+function ns:StatusIcon3(code)
+  if code == "K" then
+    return "|TInterface/TargetingFrame/UI-RaidTargetingIcon_8:14|t" -- Skull
+  end
+  if _OldStatusIcon3 then return _OldStatusIcon3(self, code) end
+  -- tiny fallback if original wasn’t defined
+  if     code == "G" or code == "S" then return "|TInterface/RAIDFRAME/ReadyCheck-Ready:14|t"
+  elseif code == "C"                then return "|TInterface/Buttons/UI-GroupLoot-Dice-Up:14|t"
+  elseif code == "A"                then return "|TInterface/RAIDFRAME/ReadyCheck-NotReady:14|t"
+  else return "" end
+end
+
+-- Preserve "K" when determining status from an entry
+local _OldGetStatus = ns.GetStatus
+function ns:GetStatus(entry)
+  local s = _OldGetStatus and _OldGetStatus(self, entry) or (entry and entry.status) or "S"
+  if entry and entry.status == "K" then return "K" end
+  return s
+end

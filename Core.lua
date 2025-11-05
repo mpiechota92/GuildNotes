@@ -4,8 +4,18 @@ local ADDON_NAME, ns = ...
 GuildNotes = GuildNotes or {}
 local M = GuildNotes
 
--- ========= Utilities =========
+-- ========= SavedVars / DB =========
+local SVAR_NAME = "GuildNotesDB"
+ns.db = ns.db or _G[SVAR_NAME]
 
+local function EnsureDB()
+  if type(_G[SVAR_NAME]) ~= "table" then _G[SVAR_NAME] = {} end
+  local db = _G[SVAR_NAME]
+  db.notes = db.notes or {}
+  ns.db = db
+end
+
+-- ========= Utilities =========
 local function SafeRandomSeed()
   local seed = (GetServerTime and GetServerTime()) or time() or 0
   if math.randomseed then pcall(math.randomseed, seed); math.random(); math.random(); math.random() end
@@ -13,59 +23,76 @@ end
 
 M.frame = CreateFrame("Frame", ADDON_NAME.."EventFrame")
 
-local DEFAULTS = {
-  version = ns.VERSION,
-  debug = false,
-  notes = {}, -- ["Player-Server"] = { name, class, race, guild, status, note, author, updated, _deleted? }
-}
-
-local function EnsureDB()
-  GuildNotesDB = GuildNotesDB or {}
-  for k, v in pairs(DEFAULTS) do
-    if GuildNotesDB[k] == nil then GuildNotesDB[k] = ns:DeepCopy(v) end
-  end
-  ns.db = GuildNotesDB
+function ns:Now()
+  return (GetServerTime and GetServerTime()) or time()
 end
 
-local function normStatus(s)
-  if s == true or s == false then return (s and "S" or "A") end
-  if s == "G" or s == "S" or s == "C" or s == "A" then return s end
-  return "S"
+function ns:PlayerKey(nameOrFull)
+  if not nameOrFull or nameOrFull == "" then return nil end
+  local name, realm = nameOrFull:match("^([^-]+)%-(.+)$")
+  if not name then name = nameOrFull; realm = GetRealmName() end
+  if not name or not realm then return nil end
+  return name.."-"..realm
 end
 
--- Helpers for permissions
-local function PlayerRankIndex()
-  if not IsInGuild() then return nil end
-  local _, _, rankIndex = GetGuildInfo("player")
-  return rankIndex
-end
+local function BaseNameFromKey(key) return (key and key:match("^[^-]+")) or "" end
 
-local function IsTop3()
-  local ri = PlayerRankIndex()
-  return ri ~= nil and ri <= 2
-end
-
--- ========= Name-only search helpers =========
-
--- "Name" from "Name-Realm"
-local function BaseNameFromKey(key)
-  return (key and key:match("^[^-]+")) or ""
-end
-
--- lowercase, stripping WoW codes
 local function lower_clean(s)
   if not s then return "" end
   s = tostring(s)
-  s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") -- strip colors
-  s = s:gsub("|T.-|t", "")                             -- strip textures
-  return s:lower()
+  s = s:gsub("|c%x%x%x%x%x%x%x%x",""):gsub("|r","")
+  s = s:gsub("|T.-|t","")
+  return string.lower(s)
 end
 
--- ========= Public API =========
+-- ===== Status helpers (accept K = Griefer) =====
+local function normStatus(s)
+  if s == true or s == false then return (s and "S" or "A") end
+  if s == "G" or s == "S" or s == "C" or s == "A" or s == "K" then return s end
+  return "S"
+end
 
-function M:GetEntry(key) return ns.db.notes[key] end
+-- Make sure label covers K, without breaking an existing implementation
+do
+  local prev = ns.StatusLabel
+  function ns:StatusLabel(code)
+    if code == "K" then return "Griefer" end
+    return prev and prev(self, code) or (code or "S")
+  end
+end
+
+-- Make sure icons cover K (Skull), but honor an existing mapping for others
+do
+  local prev = ns.StatusIcon3
+  function ns:StatusIcon3(code)
+    if code == "K" then
+      return "|TInterface/TargetingFrame/UI-RaidTargetingIcon_8:14|t" -- Skull
+    end
+    if prev then return prev(self, code) end
+    -- tiny fallback set
+    if code == "G" or code == "S" then return "|TInterface/RAIDFRAME/ReadyCheck-Ready:14|t"
+    elseif code == "C" then return "|TInterface/Buttons/UI-GroupLoot-Dice-Up:14|t"
+    elseif code == "A" then return "|TInterface/RAIDFRAME/ReadyCheck-NotReady:14|t"
+    else return "" end
+  end
+end
+
+-- Preserve explicit K when reading an entry’s status
+do
+  local prev = ns.GetStatus
+  function ns:GetStatus(entry)
+    if entry and entry.status == "K" then return "K" end
+    return (prev and prev(self, entry)) or (entry and entry.status) or "S"
+  end
+end
+
+-- ===== Backend =====
+function M:GetEntry(key)
+  return ns.db and ns.db.notes and ns.db.notes[key]
+end
 
 function M:SetEntry(fullName, data, silent)
+  EnsureDB()
   local key = ns:PlayerKey(fullName)
   if not key then return end
   data.updated = data.updated or ns:Now()
@@ -73,35 +100,25 @@ function M:SetEntry(fullName, data, silent)
   if not silent and GuildNotesUI and GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
 end
 
--- Anyone can add; only top 3 ranks can edit existing
 function M:AddOrEditEntry(nameOrFull, data)
+  EnsureDB()
   if not nameOrFull or nameOrFull == "" or type(data) ~= "table" then return end
-  if not IsInGuild() then
-    print("|cffff5555GuildNotes:|r You must be in a guild to add notes.")
-    return
-  end
   local full = ns:PlayerKey(nameOrFull)
-  local existing = ns.db.notes[full]
-  if existing and not existing._deleted and not IsTop3() then
-    print("|cffff5555GuildNotes:|r Only the top 3 guild ranks can edit notes.")
-    return
-  end
+
   data.status  = normStatus(data.status)
   data.safe    = (data.status ~= "A")
   data.author  = ns:PlayerKey(UnitName("player"))
   data.updated = ns:Now()
   data._deleted = nil
+
   M:SetEntry(full, data)
   if GuildNotesComm and GuildNotesComm.Broadcast then GuildNotesComm:Broadcast(data, full) end
 end
 
 function M:DeleteEntry(fullName)
-  if not IsTop3() then
-    print("|cffff5555GuildNotes:|r Only the top 3 guild ranks can delete notes.")
-    return
-  end
+  EnsureDB()
   local key = ns:PlayerKey(fullName); if not key then return end
-  local tomb = ns.db.notes[key] or { name = ns:AmbiguateName(key) }
+  local tomb = ns.db.notes[key] or { name = BaseNameFromKey(key) }
   tomb._deleted = true
   tomb.updated  = ns:Now()
   ns.db.notes[key] = tomb
@@ -111,75 +128,46 @@ function M:DeleteEntry(fullName)
   end
 end
 
--- Latest updated wins (tombstones included)
-function M:MergeIncoming(fullName, incoming)
-  local key = ns:PlayerKey(fullName); if not key then return end
-  local current = ns.db.notes[key]
-  local incUp = tonumber(incoming.updated or 0) or 0
-  local curUp = tonumber(current and current.updated or 0) or 0
-  if (not current) or incUp >= curUp then
-    ns.db.notes[key] = incoming
-    if GuildNotesUI and GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
+-- ===== Filtering =====
+local function match_query(e, q)
+  if not q or q == "" then return true end
+  q = lower_clean(q)
+  if lower_clean(e.name or ""):find(q, 1, true) then return true end
+  if lower_clean(e.guild or ""):find(q, 1, true) then return true end
+  if lower_clean(e.note or ""):find(q, 1, true) then return true end
+  if lower_clean(e.class or ""):find(q, 1, true) then return true end
+  if lower_clean(e.race or ""):find(q, 1, true) then return true end
+  return false
+end
+
+function M:FilteredKeys(query)
+  EnsureDB()
+  local keys = {}
+  for key,e in pairs(ns.db.notes) do
+    if not e._deleted and match_query(e, query) then table.insert(keys, key) end
   end
+  table.sort(keys, function(a,b)
+    local ea, eb = ns.db.notes[a] or {}, ns.db.notes[b] or {}
+    local na, nb = lower_clean(ea.name or BaseNameFromKey(a)), lower_clean(eb.name or BaseNameFromKey(b))
+    return na < nb
+  end)
+  return keys
 end
 
--- Universe: non-deleted keys only; sorted (group-first sorter if present)
-function M:AllKeys()
-  local out = {}
-  for key, e in pairs(ns.db.notes or {}) do
-    if e and not e._deleted then table.insert(out, key) end
-  end
-  if ns.SortKeysWithGroupFirst then return ns:SortKeysWithGroupFirst(out) end
-  table.sort(out)
-  return out
-end
-
--- ***** NAME-ONLY filter (case-insensitive substring) *****
-function M:FilteredKeys(filterText)
-  local keys = M:AllKeys() -- already non-deleted + sorted
-  local q = lower_clean((filterText or ""):match("^%s*(.-)%s*$") or "")
-  if q == "" then return keys end
-
-  local out = {}
-  for _, k in ipairs(keys) do
-    local e = ns.db.notes[k]
-    if e then
-      local name = (e.name and e.name ~= "" and e.name) or BaseNameFromKey(k)
-      if lower_clean(name):find(q, 1, true) then
-        table.insert(out, k)
-      end
-    end
-  end
-
-  if ns.SortKeysWithGroupFirst then return ns:SortKeysWithGroupFirst(out) end
-  table.sort(out)
-  return out
-end
-
--- ========= Events / bootstrap =========
-
-local function _InitAll()
-  EnsureDB(); SafeRandomSeed()
-  if GuildNotesComm and GuildNotesComm.Init then GuildNotesComm:Init() end
-  if GuildNotesUI and GuildNotesUI.Init then GuildNotesUI:Init() end
-  if GuildNotesChat and GuildNotesChat.Init then GuildNotesChat:Init() end
-end
-
+-- ===== Events & slash =====
 M.frame:RegisterEvent("ADDON_LOADED")
 M.frame:RegisterEvent("PLAYER_LOGIN")
-M.frame:SetScript("OnEvent", function(_, event, ...)
-  if event == "ADDON_LOADED" then
-    local name = ...
-    if name == ADDON_NAME then _InitAll() end
+
+M.frame:SetScript("OnEvent", function(_, event, arg1)
+  if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
+    EnsureDB()
+    SafeRandomSeed()
   elseif event == "PLAYER_LOGIN" then
-    if GuildNotesComm and GuildNotesComm.RequestFullSync then
-      GuildNotesComm:RequestFullSync()
-    end
+    EnsureDB()
     if GuildNotesUI and GuildNotesUI.Refresh then GuildNotesUI:Refresh() end
   end
 end)
 
--- Slash
 SLASH_GUILDNOTES1 = "/gnotes"
 SlashCmdList["GUILDNOTES"] = function()
   if GuildNotesUI and GuildNotesUI.Toggle then GuildNotesUI:Toggle() end
