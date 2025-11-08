@@ -13,6 +13,10 @@ local PREFIX = ns and ns.PRFX or "GuildNotes"
 -- Peer registry: map[name] = lastSeenTime (only addon users)
 C._peers = C._peers or {}
 
+-- Active sync sessions: map[requester] = { sender, dbVersion, startTime }
+-- Used to prevent accepting multiple simultaneous syncs
+C._activeSyncs = C._activeSyncs or {}
+
 -- =============================================================
 -- Utilities
 -- =============================================================
@@ -52,6 +56,80 @@ local function unesc(s)
   s = s or ""
   s = s:gsub("%%^","^"):gsub("%%%%","%%")
   return s
+end
+
+local function escReportField(v)
+  v = esc(v or "")
+  v = v:gsub(";", "%%;")
+  v = v:gsub("~", "%%~")
+  return v
+end
+
+local function unescReportField(v)
+  v = (v or ""):gsub("%%~", "~"):gsub("%%;", ";")
+  return unesc(v)
+end
+
+local function SerializeReports(reports)
+  if not reports or #reports == 0 then return "" end
+  local all = {}
+  for _, rep in ipairs(reports) do
+    local fields = {
+      escReportField(rep.author or ""),
+      escReportField(rep.status or ""),
+      escReportField(tostring(rep.ts or 0)),
+      escReportField(rep.note or ""),
+      escReportField(rep.requestedStatus or ""),
+      escReportField(rep.class or ""),
+      escReportField(rep.race or ""),
+      escReportField(rep.guild or ""),
+    }
+    all[#all+1] = table.concat(fields, "~")
+  end
+  return table.concat(all, ";")
+end
+
+local function DeserializeReports(blob)
+  if not blob or blob == "" then return {} end
+  local reports = {}
+  for chunk in string.gmatch(blob, "([^;]+)") do
+    local fields, idx = {}, 1
+    for part in string.gmatch(chunk .. "~", "([^~]*)~") do
+      fields[idx] = unescReportField(part)
+      idx = idx + 1
+    end
+    local rep = {
+      author = fields[1] or "",
+      status = fields[2] or "S",
+      ts     = tryToNumber(fields[3]) or 0,
+      note   = fields[4] or "",
+    }
+    if fields[5] and fields[5] ~= "" then rep.requestedStatus = fields[5] end
+    if fields[6] and fields[6] ~= "" then rep.class = fields[6] end
+    if fields[7] and fields[7] ~= "" then rep.race = fields[7] end
+    if fields[8] and fields[8] ~= "" then rep.guild = fields[8] end
+    reports[#reports+1] = rep
+  end
+  return reports
+end
+
+local function BuildEntryFields(fullName, entry)
+  if not (fullName and entry) then return nil end
+  local up     = tostring(entry.updated or Now())
+  local status = entry.status or ((entry.safe == false) and "A" or "S")
+  local class  = entry.class or ""
+  local race   = entry.race or ""
+  local guild  = entry.guild or ""
+  local author = entry.author or ""
+  local note   = entry.note or ""
+  local reports = SerializeReports(entry.reports)
+  return { esc(fullName), esc(up), esc(status), esc(class), esc(race), esc(guild), esc(author), esc(note), esc(reports) }
+end
+
+local function BuildEntryPayload(fullName, entry)
+  local fields = BuildEntryFields(fullName, entry)
+  if not fields then return nil end
+  return "E|"..table.concat(fields, "^")
 end
 
 -- Classic whisper target (strip -Realm)
@@ -126,17 +204,23 @@ end
 -- =============================================================
 -- Wire format
 -- =============================================================
--- E|name-realm^updated^status^class^race^guild^author^note
+-- E|name-realm^updated^status^class^race^guild^author^note^reports
 -- D|name-realm^updated
--- R|<version>|<requester>
+-- R|<version>|<requester>|<dbVersion>  (dbVersion is max updated timestamp)
 -- F|entry~entry~...  (legacy batch; entry is E payload without "E|")
 -- H|name-realm       (peer hello)
 -- MF|k1^t1~k2^t2~... (manifest of key^timestamp pairs)
 -- N|k1~k2~k3         (request specific keys)
 
 local function DeserializeEntry(payload)
-  local f1,f2,f3,f4,f5,f6,f7,f8 = payload:match("^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^(.*)$")
+  local f1,f2,f3,f4,f5,f6,f7,rest = payload:match("^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^([^%^]*)%^(.*)$")
   if not f1 then return nil end
+  local f8, f9 = rest or "", ""
+  local caretPos = rest and rest:find("^", 1, true)
+  if caretPos then
+    f8 = rest:sub(1, caretPos - 1)
+    f9 = rest:sub(caretPos + 1)
+  end
   local full    = unesc(f1)
   local updated = tryToNumber(unesc(f2))
   local status  = unesc(f3)
@@ -144,21 +228,26 @@ local function DeserializeEntry(payload)
   local race    = unesc(f5)
   local guild   = unesc(f6)
   local author  = unesc(f7)
-  local note    = unesc(f8)
+  local note    = unesc(f8 or "")
+  local reports = DeserializeReports(unesc(f9 or ""))
   if full == "" then return nil end
-  local st = (status=="G" or status=="S" or status=="C" or status=="A") and status or "S"
+  local st = (status=="G" or status=="S" or status=="C" or status=="A" or status=="K") and status or "S"
   local e = {
     name     = (full:match("^[^-]+")) or full,
     updated  = updated,
     status   = st,
-    safe     = (st ~= "A"),
+    safe     = (st ~= "A" and st ~= "K"),
     class    = class ~= "" and class or nil,
     race     = race  ~= "" and race  or nil,
     guild    = guild ~= "" and guild or nil,
     author   = author~= "" and author or nil,
     note     = note   ~= "" and note   or nil,
     _deleted = false,
+    reports  = reports,
   }
+  if (#reports > 0) and (not e.note or e.note == "") and (st == "S") then
+    e._pendingOnly = true
+  end
   return full, e
 end
 
@@ -170,24 +259,21 @@ local function SendFullSyncTo(target)
   if not GuildNotes or not GuildNotes.AllKeys then return end
   local keys = GuildNotes:AllKeys()
   local batchSize = 10
+  local sent = 0
   for i=1,#keys,batchSize do
     for j=i, math.min(i+batchSize-1,#keys) do
       local k = keys[j]
       local e = GuildNotes:GetEntry(k)
       if e and not e._deleted then
-        local up     = tostring(e.updated or Now())
-        local status = e.status or ((e.safe == false) and "A" or "S")
-        local class  = e.class or ""
-        local race   = e.race or ""
-        local guild  = e.guild or ""
-        local author = e.author or ""
-        local note   = e.note or ""
-        local payload = "E|"..table.concat({esc(k), esc(up), esc(status), esc(class), esc(race), esc(guild), esc(author), esc(note)}, "^")
-        SendAddonMessageCompatWhisper(payload, target)
+        local payload = BuildEntryPayload(k, e)
+        if payload then
+          SendAddonMessageCompatWhisper(payload, target)
+          sent = sent + 1
+        end
       end
     end
   end
-  dbg("Sent full E to", target)
+  dbg("Sent full E to", target, "(", sent, "entries )")
 end
 
 local function SendFullDeletionsTo(target)
@@ -208,14 +294,8 @@ end
 function C:Broadcast(entry, fullName)
   if not (entry and fullName) then return end
   if entry._deleted then return end
-  local up     = tostring(entry.updated or Now())
-  local status = entry.status or ((entry.safe == false) and "A" or "S")
-  local class  = entry.class or ""
-  local race   = entry.race or ""
-  local guild  = entry.guild or ""
-  local author = entry.author or ""
-  local note   = entry.note or ""
-  local payload = "E|"..table.concat({ esc(fullName), esc(up), esc(status), esc(class), esc(race), esc(guild), esc(author), esc(note) }, "^")
+  local payload = BuildEntryPayload(fullName, entry)
+  if not payload then return end
   if IsInGuild() then SendAddonMessageCompat(payload, "GUILD") end
   if IsInRaid() then SendAddonMessageCompat(payload, "RAID")
   elseif IsInGroup() then SendAddonMessageCompat(payload, "PARTY") end
@@ -243,14 +323,10 @@ local function SendFullSync()
       local k = keys[j]
       local e = GuildNotes:GetEntry(k)
       if e and not e._deleted then
-        local up     = tostring(e.updated or Now())
-        local status = e.status or ((e.safe == false) and "A" or "S")
-        local class  = e.class or ""
-        local race   = e.race or ""
-        local guild  = e.guild or ""
-        local author = e.author or ""
-        local note   = e.note or ""
-        parts[#parts+1] = table.concat({ esc(k), esc(up), esc(status), esc(class), esc(race), esc(guild), esc(author), esc(note) }, "^")
+        local fields = BuildEntryFields(k, e)
+        if fields then
+          parts[#parts+1] = table.concat(fields, "^")
+        end
       end
     end
     if #parts > 0 then
@@ -279,11 +355,21 @@ function C:RequestFullSyncSelf()
   local name, realm = UnitName("player"), GetNormalizedRealmName()
   local me = (realm and (name.."-"..realm)) or name
   if not me or me == "" then return end
-  local payload = "R|"..(ns and ns.VERSION or "2.0.0").."|"..me
+  
+  -- Clear any existing sync sessions
+  C._activeSyncs = {}
+  
+  -- Get our database version
+  local dbVersion = 0
+  if GuildNotes and GuildNotes.GetDatabaseVersion then
+    dbVersion = GuildNotes:GetDatabaseVersion() or 0
+  end
+  
+  local payload = "R|"..(ns and ns.VERSION or "2.0.0").."|"..me.."|"..tostring(dbVersion)
   if IsInGuild() then SendAddonMessageCompat(payload, "GUILD") end
   if IsInRaid() then SendAddonMessageCompat(payload, "RAID")
   elseif IsInGroup() then SendAddonMessageCompat(payload, "PARTY") end
-  dbg("Requested targeted sync:", me)
+  dbg("Requested targeted sync:", me, "dbVersion:", dbVersion)
 end
 
 -- =============================================================
@@ -342,6 +428,25 @@ local function PickOnePeer()
   end
   table.sort(pool, function(a,b) return a < b end)
   return pool[1]  -- nil if none
+end
+
+-- Get our database version for sync responses
+local function GetOurDatabaseVersion()
+  if GuildNotes and GuildNotes.GetDatabaseVersion then
+    return GuildNotes:GetDatabaseVersion() or 0
+  end
+  -- Fallback: calculate manually
+  EnsureDB()
+  local maxUpdated = 0
+  for _, entry in pairs(ns.db.notes) do
+    if entry and entry.updated then
+      local updated = tonumber(entry.updated) or 0
+      if updated > maxUpdated then
+        maxUpdated = updated
+      end
+    end
+  end
+  return maxUpdated
 end
 
 -- =============================================================
@@ -435,15 +540,10 @@ local function OnNeedList(target, list)
         local up = tostring(e.updated or Now())
         SendAddonMessageCompatWhisper("D|"..esc(key).."^"..esc(up), target)
       else
-        local up     = tostring(e.updated or Now())
-        local status = e.status or ((e.safe == false) and "A" or "S")
-        local class  = e.class or ""
-        local race   = e.race or ""
-        local guild  = e.guild or ""
-        local author = e.author or ""
-        local note   = e.note or ""
-        local payload = "E|"..table.concat({esc(key), esc(up), esc(status), esc(class), esc(race), esc(guild), esc(author), esc(note)}, "^")
-        SendAddonMessageCompatWhisper(payload, target)
+        local payload = BuildEntryPayload(key, e)
+        if payload then
+          SendAddonMessageCompatWhisper(payload, target)
+        end
       end
     end
   end
@@ -487,28 +587,65 @@ local function OnComm(prefix, msg, channel, sender)
     end
 
   elseif kind == "R" then
-    -- R|<version>|<requester>
-    local ver, requester = rest:match("^([^|]+)|(.+)$")
+    -- R|<version>|<requester>|<dbVersion>
+    local ver, requester, requesterDbVersion = rest:match("^([^|]+)|([^|]*)|?(.*)$")
     requester = requester or ""
+    requesterDbVersion = tonumber(requesterDbVersion) or 0
     local meName, meRealm = UnitName("player"), GetNormalizedRealmName()
     local me = (meRealm and (meName.."-"..meRealm)) or meName
 
     if requester == me or requester == meName then
       dbg("Ignoring my own R")
     else
-      if IsEligibleResponder(2, requester) then
+      -- Get our database version
+      local ourDbVersion = GetOurDatabaseVersion()
+      
+      -- Only respond if we have newer or equal data (or if requester has no data)
+      local shouldRespond = (ourDbVersion >= requesterDbVersion) or (requesterDbVersion == 0)
+      
+      if shouldRespond and IsEligibleResponder(2, requester) then
+        -- Check if there's already an active sync for this requester
+        local existingSync = C._activeSyncs[requester]
+        if existingSync then
+          -- If we have a newer database version than the current responder, replace them
+          local existingVersion = existingSync.dbVersion or 0
+          if ourDbVersion > existingVersion then
+            dbg("Replacing existing sync responder (we have newer data)")
+            C._activeSyncs[requester] = { sender = me, dbVersion = ourDbVersion, startTime = Now() }
+          else
+            dbg("Ignoring R - another peer is already syncing with better data")
+            return
+          end
+        else
+          -- Start new sync session
+          C._activeSyncs[requester] = { sender = me, dbVersion = ourDbVersion, startTime = Now() }
+        end
+        
         local function doRespond()
           local tgt = WhisperTargetFromFull(requester)
           SendFullSyncTo(tgt)
           SendFullDeletionsTo(tgt)
           -- also start anti-entropy so BOTH sides converge
           SendManifestTo(tgt, BuildNewestKeys(50))
-          dbg("Responded to R from", requester)
+          dbg("Responded to R from", requester, "ourDbVersion:", ourDbVersion, "theirDbVersion:", requesterDbVersion)
+          
+          -- Clean up sync session after 30 seconds
+          if C_Timer and C_Timer.After then
+            C_Timer.After(30, function()
+              if C._activeSyncs[requester] and C._activeSyncs[requester].sender == me then
+                C._activeSyncs[requester] = nil
+              end
+            end)
+          end
         end
         local delay = math.random(5, 20) / 10  -- 0.5–2.0s jitter
         if C_Timer and C_Timer.After then C_Timer.After(delay, doRespond) else doRespond() end
       else
-        dbg("Not eligible (peer election)")
+        if not shouldRespond then
+          dbg("Not responding - requester has newer data (their:", requesterDbVersion, "our:", ourDbVersion, ")")
+        else
+          dbg("Not eligible (peer election)")
+        end
       end
     end
 
@@ -544,13 +681,7 @@ if not C._boot then
       if C.Init then C:Init() end
       SendHello()
 
-      -- Freshness gate: empty or >7d since lastSyncAt => targeted full pull
-      EnsureDB()
-      local stale = (not next(ns.db.notes)) or (Now() - (ns.db.lastSyncAt or 0) > 7*24*60*60)
-      if stale and C.RequestFullSyncSelf then
-        dbg("DB stale/empty -> requesting targeted full sync")
-        C:RequestFullSyncSelf()
-      end
+      -- Automatic sync on login removed - use manual sync button instead
 
       -- Periodic HELLO (peer list freshness) every 5 minutes
       if C_Timer and not C._helloTicker and C_Timer.NewTicker then

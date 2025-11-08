@@ -63,9 +63,23 @@ local function CreateRow(parent, i, getWidth)
          or {}
     if not e or not e.note or e.note == "" then return end
 
+    -- Remove history entries from the note (lines starting with [YYYY-MM-DD])
+    local noteText = e.note
+    local lines = {}
+    for line in noteText:gmatch("[^\r\n]+") do
+      -- Skip lines that look like history entries: [YYYY-MM-DD] or [YYYY-MM-DD HH:MM]
+      if not line:match("^%[%d%d%d%d%-%d%d%-%d%d") then
+        table.insert(lines, line)
+      end
+    end
+    local displayNote = #lines > 0 and table.concat(lines, "\n") or "(no note)"
+    if displayNote == "" or displayNote == "(no note)" then
+      return -- Don't show tooltip if no note content after filtering
+    end
+
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:AddLine("Note", 1, 0.82, 0)
-    GameTooltip:AddLine(e.note, 1, 1, 1, true) -- true = wrap long notes
+    GameTooltip:AddLine(displayNote, 1, 1, 1, true) -- true = wrap long notes
     GameTooltip:Show()
   end)
   noteFS:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -102,10 +116,13 @@ local function CreateRow(parent, i, getWidth)
   end)
 
   
--- Click to edit / context menu
-row:RegisterForClicks("AnyUp")
-row:SetScript("OnMouseUp", function(self, button)
-          if GuildNotesUI and GuildNotesUI.canEdit == false then return end
+-- Click to edit / context menu (officers only)
+-- Store the original handler so we can restore it for officers
+local originalClickHandler = function(self, button)
+  -- Double-check permissions (in case they changed)
+  if GuildNotesUI and GuildNotesUI.canEdit == false then
+    return
+  end
   if not self.key or not GuildNotesUI then return end
   if button == "RightButton" then
     -- open the default UnitPopup menu item we injected (Menu.lua adds it)
@@ -121,7 +138,10 @@ row:SetScript("OnMouseUp", function(self, button)
     -- Left click: open editor for this key
     GuildNotesUI:OpenEditor(self.key)
   end
-end)
+end
+row:RegisterForClicks("AnyUp")
+row:SetScript("OnMouseUp", originalClickHandler)
+row._originalClickHandler = originalClickHandler  -- Store for later restoration
 return row
 end
 
@@ -165,6 +185,20 @@ function UI:RenderRows(keys, offset)
              or (GuildNotesDB and GuildNotesDB.notes and GuildNotesDB.notes[key])
              or {}
       row:Show(); row.key = key
+      
+      -- Disable row clicks for non-officers (but keep hover for tooltips)
+      local canEdit = (GuildNotesUI and GuildNotesUI.canEdit ~= false)
+      if not canEdit then
+        -- Replace click handler with a no-op for non-officers
+        row:SetScript("OnMouseUp", function() end)
+        row:RegisterForClicks()  -- Unregister clicks
+      else
+        -- Restore original click handler for officers
+        if row._originalClickHandler then
+          row:SetScript("OnMouseUp", row._originalClickHandler)
+        end
+        row:RegisterForClicks("AnyUp")  -- Ensure clicks are registered
+      end
 
       local r,g,b = 1,1,1
       if ns and ns.RGBForClass and e.class then

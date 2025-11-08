@@ -101,8 +101,28 @@ function UI:Init()
   f:SetMovable(true)
   f:EnableMouse(true)
   f:RegisterForDrag("LeftButton")
-  f:SetScript("OnDragStart", function(self) self:StartMoving() end)
-  f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+  f:SetScript("OnDragStart", function(self)
+    self:StartMoving()
+    -- Also move the review window if it exists and is shown
+    if UI.reviewFrame and UI.reviewFrame:IsShown() then
+      UI.reviewFrame:StartMoving()
+    end
+  end)
+  f:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    -- Also stop moving the review window
+    if UI.reviewFrame and UI.reviewFrame:IsShown() then
+      UI.reviewFrame:StopMovingOrSizing()
+      -- Maintain relative position
+      if UI.reviewOffsetX and UI.reviewOffsetY then
+        local mainX, mainY = self:GetCenter()
+        if mainX and mainY then
+          UI.reviewFrame:ClearAllPoints()
+          UI.reviewFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", mainX + UI.reviewOffsetX, mainY + UI.reviewOffsetY)
+        end
+      end
+    end
+  end)
   -- f:SetUserPlaced(true)
   f:SetBackdrop({
     bgFile="Interface/DialogFrame/UI-DialogBox-Background",
@@ -149,6 +169,29 @@ function UI:Init()
   addBtn:Enable(); addBtn:SetPoint("LEFT", search, "RIGHT", 8, 0)
   addBtn:SetScript("OnClick", function() UI:OpenEditor(nil) end)
   self.addBtn = addBtn
+
+  local reviewBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  reviewBtn:SetSize(120, 22)
+  reviewBtn:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
+  reviewBtn:SetText("Review")
+  reviewBtn:SetScript("OnClick", function() UI:OpenReviewQueue() end)
+  reviewBtn:Hide()
+  self.reviewBtn = reviewBtn
+  if self.UpdateReviewButton then self:UpdateReviewButton() end
+
+  local syncBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  syncBtn:SetSize(100, 22)
+  syncBtn:SetPoint("LEFT", reviewBtn, "RIGHT", 8, 0)
+  syncBtn:SetText("Sync")
+  syncBtn:SetScript("OnClick", function()
+    if GuildNotesComm and GuildNotesComm.RequestFullSyncSelf then
+      print("|cff88c0d0[GuildNotes]|r Requesting full sync from guild members...")
+      GuildNotesComm:RequestFullSyncSelf()
+    else
+      print("|cff88c0d0[GuildNotes]|r Sync unavailable (Comm not initialized?)")
+    end
+  end)
+  self.syncBtn = syncBtn
 
   -- Header
   local hdr = CreateFrame("Frame", nil, f)
@@ -326,4 +369,26 @@ function UI:Refresh()
 
   -- Update footer UI
   UpdateFooter(self)
+
+  if self.UpdateReviewButton then self:UpdateReviewButton() end
+end
+
+function UI:UpdateReviewButton()
+  if not self.reviewBtn then return end
+  local count = 0
+  if GuildNotes and GuildNotes.PendingReportCount then
+    count = GuildNotes:PendingReportCount() or 0
+  end
+  local label = (count and count > 0) and ("Review ("..count..")") or "Review"
+  self.reviewBtn:SetText(label)
+  if count and count > 0 then
+    self.reviewBtn:Enable()
+  else
+    self.reviewBtn:Disable()
+  end
+  if self.canEdit == false then
+    self.reviewBtn:Hide()
+  else
+    self.reviewBtn:Show()
+  end
 end

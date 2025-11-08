@@ -50,6 +50,8 @@ end
 function GuildNotesUI:RecomputePermissions()
   self.canEdit = IsTop3()
   if self.deleteBtn and self.currentKey then self.deleteBtn:SetShown(self.canEdit) end
+  if self.reviewBtn then self.reviewBtn:SetShown(self.canEdit) end
+  if self.UpdateReviewButton then self:UpdateReviewButton() end
 end
 
 -- ===== Safe lower / sanitize =====
