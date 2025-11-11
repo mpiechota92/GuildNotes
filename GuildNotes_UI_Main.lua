@@ -6,6 +6,57 @@ ns.UI = ns.UI or {}
 local UI = ns.UI
 local UpdateFooter  -- forward declaration
 
+function UI:GetSyncCooldownEndsAt()
+  if ns and ns.GetSyncCooldownEndsAt then
+    return ns:GetSyncCooldownEndsAt()
+  end
+  return 0
+end
+
+function UI:IsSyncOnCooldown()
+  if ns and ns.IsSyncOnCooldown then
+    return ns:IsSyncOnCooldown()
+  end
+  return false
+end
+
+function UI:StartSyncCooldown()
+  if ns and ns.StartSyncCooldown then
+    ns:StartSyncCooldown()
+  end
+  self:ApplySyncButtonState()
+end
+
+function UI:ApplySyncButtonState()
+  if not self.syncBtn then return end
+
+  local remaining = 0
+  if ns and ns.GetSyncCooldownRemaining then
+    remaining = ns:GetSyncCooldownRemaining()
+  elseif ns and ns.GetSyncCooldownEndsAt then
+    remaining = math.max(0, (ns:GetSyncCooldownEndsAt() or 0) - (ns.Now and ns:Now() or time()))
+  end
+
+  if remaining > 0 then
+    self.syncBtn:Disable()
+    local minutes = math.ceil(remaining / 60)
+    self.syncBtn:SetText(("Sync (%dm)"):format(minutes))
+
+    if remaining > 0 and C_Timer and C_Timer.After and not self._syncCooldownTimerScheduled then
+      local delay = math.min(remaining, 60)
+      if delay <= 0 then delay = 1 end
+      self._syncCooldownTimerScheduled = true
+      C_Timer.After(delay, function()
+        UI._syncCooldownTimerScheduled = nil
+        UI:ApplySyncButtonState()
+      end)
+    end
+  else
+    self.syncBtn:Enable()
+    self.syncBtn:SetText("Sync")
+  end
+end
+
 -- Page-based wheel scrolling: move exactly one page per step (no overlaps)
 function UI:ScrollOffsetBy(n)
   -- n: positive = next page, negative = previous page (we clamp)
@@ -184,14 +235,47 @@ function UI:Init()
   syncBtn:SetPoint("LEFT", reviewBtn, "RIGHT", 8, 0)
   syncBtn:SetText("Sync")
   syncBtn:SetScript("OnClick", function()
+    if UI:IsSyncOnCooldown() then
+      local remaining = 0
+      if ns and ns.GetSyncCooldownRemaining then
+        remaining = ns:GetSyncCooldownRemaining()
+      elseif ns and ns.GetSyncCooldownEndsAt then
+        remaining = math.max(0, (ns:GetSyncCooldownEndsAt() or 0) - (ns.Now and ns:Now() or time()))
+      end
+      if remaining > 0 then
+        local minutes = math.ceil(remaining / 60)
+        print("|cff88c0d0[GuildNotes]|r Sync is on cooldown ("..minutes.." min remaining).")
+      end
+      return
+    end
+
+    if IsResting and not IsResting() then
+      print("|cff88c0d0[GuildNotes]|r You must be resting (inn or capital) to request a sync.")
+      return
+    end
+
     if GuildNotesComm and GuildNotesComm.RequestFullSyncSelf then
-      print("|cff88c0d0[GuildNotes]|r Requesting full sync from guild members...")
-      GuildNotesComm:RequestFullSyncSelf()
+      local ok, err = GuildNotesComm:RequestFullSyncSelf()
+      if ok then
+        print("|cff88c0d0[GuildNotes]|r Requesting full sync from guild members...")
+        UI:ApplySyncButtonState()
+      elseif err == "cooldown" then
+        UI:ApplySyncButtonState()
+      elseif err == "not_resting" then
+        print("|cff88c0d0[GuildNotes]|r You must be resting (inn or capital) to request a sync.")
+      elseif err == "no_player" then
+        print("|cff88c0d0[GuildNotes]|r Unable to determine player identity; sync aborted.")
+      elseif err == "version" then
+        print("|cff88c0d0[GuildNotes]|r Sync blocked due to version mismatch.")
+      else
+        print("|cff88c0d0[GuildNotes]|r Sync request failed.")
+      end
     else
       print("|cff88c0d0[GuildNotes]|r Sync unavailable (Comm not initialized?)")
     end
   end)
   self.syncBtn = syncBtn
+  self:ApplySyncButtonState()
 
   -- Header
   local hdr = CreateFrame("Frame", nil, f)
@@ -371,6 +455,7 @@ function UI:Refresh()
   UpdateFooter(self)
 
   if self.UpdateReviewButton then self:UpdateReviewButton() end
+  if self.ApplySyncButtonState then self:ApplySyncButtonState() end
 end
 
 function UI:UpdateReviewButton()

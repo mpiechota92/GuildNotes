@@ -15,6 +15,11 @@ local function EnsureDB()
   ns.db = db
 end
 
+function ns:EnsureDB()
+  EnsureDB()
+  return ns.db
+end
+
 -- ========= Utilities =========
 local function SafeRandomSeed()
   local seed = (GetServerTime and GetServerTime()) or time() or 0
@@ -25,6 +30,43 @@ M.frame = CreateFrame("Frame", ADDON_NAME.."EventFrame")
 
 function ns:Now()
   return (GetServerTime and GetServerTime()) or time()
+end
+
+ns.SYNC_COOLDOWN_SECONDS = ns.SYNC_COOLDOWN_SECONDS or (30 * 60)
+
+function ns:GetSyncCooldownEndsAt()
+  EnsureDB()
+  return ns.db.syncCooldownEndsAt or 0
+end
+
+function ns:GetSyncCooldownRemaining()
+  local remaining = (self:GetSyncCooldownEndsAt() or 0) - self:Now()
+  if remaining < 0 then remaining = 0 end
+  return remaining
+end
+
+function ns:IsSyncOnCooldown()
+  return self:GetSyncCooldownRemaining() > 0
+end
+
+function ns:SetSyncCooldownEndsAt(timestamp)
+  EnsureDB()
+  if not timestamp or timestamp <= 0 then
+    ns.db.syncCooldownEndsAt = nil
+  else
+    ns.db.syncCooldownEndsAt = timestamp
+  end
+end
+
+function ns:StartSyncCooldown(duration)
+  duration = duration or self.SYNC_COOLDOWN_SECONDS or (30 * 60)
+  local endsAt = self:Now() + duration
+  self:SetSyncCooldownEndsAt(endsAt)
+  return endsAt
+end
+
+function ns:ClearSyncCooldown()
+  self:SetSyncCooldownEndsAt(nil)
 end
 
 -- Calculate database version (max updated timestamp across all entries)

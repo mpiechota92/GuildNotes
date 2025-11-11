@@ -45,6 +45,58 @@ local function tryToNumber(v)
   return tonumber(d) or 0
 end
 
+local function IsSyncOnCooldown()
+  return ns and ns.IsSyncOnCooldown and ns:IsSyncOnCooldown()
+end
+
+local function SyncCooldownRemaining()
+  if ns and ns.GetSyncCooldownRemaining then
+    return ns:GetSyncCooldownRemaining()
+  elseif ns and ns.GetSyncCooldownEndsAt and ns.Now then
+    local remaining = (ns:GetSyncCooldownEndsAt() or 0) - ns:Now()
+    if remaining < 0 then remaining = 0 end
+    return remaining
+  end
+  return 0
+end
+
+local function StartSyncCooldown()
+  if ns and ns.StartSyncCooldown then
+    return ns:StartSyncCooldown()
+  end
+end
+
+local function ParseVersionParts(v)
+  local parts = {}
+  if type(v) == "number" then
+    parts[1] = math.floor(v)
+  elseif type(v) == "string" then
+    for token in v:gmatch("(%d+)") do
+      parts[#parts+1] = tonumber(token) or 0
+    end
+  end
+  if #parts == 0 then
+    parts[1] = 0
+  end
+  return parts
+end
+
+local function CompareVersions(a, b)
+  local ap = ParseVersionParts(a)
+  local bp = ParseVersionParts(b)
+  local len = math.max(#ap, #bp)
+  for i = 1, len do
+    local av = ap[i] or 0
+    local bv = bp[i] or 0
+    if av > bv then
+      return 1
+    elseif av < bv then
+      return -1
+    end
+  end
+  return 0
+end
+
 -- Escape/unescape ^ and % inside payloads
 local function esc(s)
   s = s or ""
@@ -343,18 +395,36 @@ end
 -- Requests
 -- =============================================================
 
-function C:RequestFullSync()
+function C:RequestFullSync(opts)
+  opts = opts or {}
+  if IsSyncOnCooldown() then
+    return false, "cooldown", SyncCooldownRemaining()
+  end
+  if IsResting and not IsResting() then
+    return false, "not_resting"
+  end
+
+  StartSyncCooldown()
   local payload = "R|"..(ns and ns.VERSION or "2.0.0")
   if IsInGuild() then SendAddonMessageCompat(payload, "GUILD") end
   if IsInRaid() then SendAddonMessageCompat(payload, "RAID")
   elseif IsInGroup() then SendAddonMessageCompat(payload, "PARTY") end
   dbg("Requested legacy full sync")
+  return true
 end
 
-function C:RequestFullSyncSelf()
+function C:RequestFullSyncSelf(opts)
+  opts = opts or {}
+  if IsSyncOnCooldown() then
+    return false, "cooldown", SyncCooldownRemaining()
+  end
+  if IsResting and not IsResting() then
+    return false, "not_resting"
+  end
   local name, realm = UnitName("player"), GetNormalizedRealmName()
   local me = (realm and (name.."-"..realm)) or name
-  if not me or me == "" then return end
+  if not me or me == "" then return false, "no_player" end
+  StartSyncCooldown()
   
   -- Clear any existing sync sessions
   C._activeSyncs = {}
@@ -370,6 +440,7 @@ function C:RequestFullSyncSelf()
   if IsInRaid() then SendAddonMessageCompat(payload, "RAID")
   elseif IsInGroup() then SendAddonMessageCompat(payload, "PARTY") end
   dbg("Requested targeted sync:", me, "dbVersion:", dbVersion)
+  return true
 end
 
 -- =============================================================
@@ -591,8 +662,24 @@ local function OnComm(prefix, msg, channel, sender)
     local ver, requester, requesterDbVersion = rest:match("^([^|]+)|([^|]*)|?(.*)$")
     requester = requester or ""
     requesterDbVersion = tonumber(requesterDbVersion) or 0
+    local myVersion = ns and ns.VERSION
     local meName, meRealm = UnitName("player"), GetNormalizedRealmName()
     local me = (meRealm and (meName.."-"..meRealm)) or meName
+
+    if myVersion and CompareVersions(ver, myVersion) < 0 then
+      dbg("Ignoring sync request from older version:", sender, "their:", ver, "ours:", myVersion)
+      return
+    end
+
+    if IsResting and not IsResting() then
+      dbg("Ignoring sync request - not resting:", sender or "unknown")
+      return
+    end
+
+    if IsSyncOnCooldown() then
+      dbg("Ignoring sync request - cooldown active:", sender or "unknown")
+      return
+    end
 
     if requester == me or requester == meName then
       dbg("Ignoring my own R")
@@ -711,8 +798,20 @@ end
 SLASH_GNOTESSYNC1 = "/gnotesync"
 SlashCmdList["GNOTESSYNC"] = function()
   if C and C.RequestFullSyncSelf then
-    print("|cff88c0d0[GuildNotes]|r requesting targeted sync…")
-    C:RequestFullSyncSelf()
+    local ok, reason, extra = C:RequestFullSyncSelf()
+    if ok then
+      print("|cff88c0d0[GuildNotes]|r requesting targeted sync…")
+    elseif reason == "cooldown" then
+      local remaining = extra or SyncCooldownRemaining()
+      local minutes = math.ceil((remaining or 0) / 60)
+      print("|cff88c0d0[GuildNotes]|r Sync is on cooldown ("..minutes.." min remaining).")
+    elseif reason == "not_resting" then
+      print("|cff88c0d0[GuildNotes]|r You must be resting (inn or capital) to request a sync.")
+    elseif reason == "no_player" then
+      print("|cff88c0d0[GuildNotes]|r Unable to determine player name; sync aborted.")
+    else
+      print("|cff88c0d0[GuildNotes]|r Sync unavailable (unknown reason).")
+    end
   else
     print("|cff88c0d0[GuildNotes]|r sync unavailable (Comm not initialized?)")
   end

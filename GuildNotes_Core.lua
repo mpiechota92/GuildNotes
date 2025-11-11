@@ -5,6 +5,18 @@ local ADDON_NAME, ns = ...
 ns = ns or {}
 _G[ADDON_NAME] = ns
 
+-- Version metadata (from .toc)
+do
+  local version = nil
+  if type(GetAddOnMetadata) == "function" then
+    version = GetAddOnMetadata(ADDON_NAME, "Version")
+  end
+  if type(version) ~= "string" or version == "" then
+    version = ns.VERSION or "0.0.0"
+  end
+  ns.VERSION = version
+end
+
 -- Public UI table
 GuildNotesUI = GuildNotesUI or {}
 ns.UI = GuildNotesUI
