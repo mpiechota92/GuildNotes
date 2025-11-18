@@ -190,6 +190,24 @@ local function WhisperTargetFromFull(full)
   return (full:match("^[^-]+")) or full
 end
 
+-- Check if a player is a known addon peer (has sent us addon messages)
+local function IsKnownPeer(fullName)
+  if not fullName or fullName == "" then return false end
+  -- Check full name (name-realm)
+  if C._peers[fullName] then return true end
+  -- Check base name (without realm)
+  local baseName = WhisperTargetFromFull(fullName)
+  if baseName and baseName ~= fullName and C._peers[baseName] then return true end
+  -- Check if any peer matches (for cross-realm scenarios)
+  for peerName, _ in pairs(C._peers) do
+    local peerBase = WhisperTargetFromFull(peerName)
+    if peerBase == baseName or peerName == fullName then
+      return true
+    end
+  end
+  return false
+end
+
 -- Safe addon message send (group channels)
 local function SendAddonMessageCompat(msg, channel)
   if C_ChatInfo and C_ChatInfo.SendAddonMessage then
@@ -309,6 +327,11 @@ end
 
 local function SendFullSyncTo(target)
   if not GuildNotes or not GuildNotes.AllKeys then return end
+  -- Only send to known addon peers
+  if not IsKnownPeer(target) then
+    dbg("Not sending sync to", target, "- not a known peer")
+    return
+  end
   local keys = GuildNotes:AllKeys()
   local batchSize = 10
   local sent = 0
@@ -330,6 +353,11 @@ end
 
 local function SendFullDeletionsTo(target)
   if not GuildNotes or not GuildNotes.AllKeys then return end
+  -- Only send to known addon peers
+  if not IsKnownPeer(target) then
+    dbg("Not sending deletions to", target, "- not a known peer")
+    return
+  end
   local keys = GuildNotes:AllKeys()
   for _,k in ipairs(keys) do
     local e = GuildNotes:GetEntry(k)
@@ -557,6 +585,11 @@ end
 local function SendManifestTo(target, keys)
   target = WhisperTargetFromFull(target)
   if not target or target == "" or not keys or #keys == 0 then return end
+  -- Only send to known addon peers
+  if not IsKnownPeer(target) then
+    dbg("Not sending manifest to", target, "- not a known peer")
+    return
+  end
   local batch, bufLen = {}, 0
   local function flush()
     if #batch == 0 then return end
@@ -589,17 +622,28 @@ local function OnManifest(sender, list)
     end
   end
   if #need > 0 then
+    local target = WhisperTargetFromFull(sender)
+    -- Only send to known addon peers
+    if not IsKnownPeer(target) then
+      dbg("Not sending need list to", target, "- not a known peer")
+      return
+    end
     local cap = 50
     local chunk = {}
     for i=1, math.min(#need, cap) do chunk[i] = need[i] end
     local payload = "N|"..table.concat(chunk, "~")
-    SendAddonMessageCompatWhisper(payload, WhisperTargetFromFull(sender))
+    SendAddonMessageCompatWhisper(payload, target)
     dbg("Replied with N to", sender, "(", #chunk, "keys )")
   end
 end
 
 local function OnNeedList(target, list)
   target = WhisperTargetFromFull(target)
+  -- Only send to known addon peers
+  if not IsKnownPeer(target) then
+    dbg("Not fulfilling need list for", target, "- not a known peer")
+    return
+  end
   for key in string.gmatch(list, "([^~]+)") do
     key = unesc(key)
     local e = GuildNotes and GuildNotes.GetEntry and GuildNotes:GetEntry(key)
@@ -683,6 +727,9 @@ local function OnComm(prefix, msg, channel, sender)
 
     if requester == me or requester == meName then
       dbg("Ignoring my own R")
+    elseif not IsKnownPeer(requester) then
+      -- Only respond to known addon peers
+      dbg("Ignoring sync request from unknown peer:", requester)
     else
       -- Get our database version
       local ourDbVersion = GetOurDatabaseVersion()
